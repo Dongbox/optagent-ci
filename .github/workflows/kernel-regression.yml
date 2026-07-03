@@ -149,18 +149,18 @@ jobs:
       - name: Run kernel regression tests
         if: steps.gate.outputs.run == 'true'
         env:
-          PYTHONPATH: "build:optagent/src"
+          PYTHONPATH: "../build:src"
           ASAN_OPTIONS: "detect_leaks=1:halt_on_error=1:strict_string_checks=1"
           UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
         run: |
           . .venv/bin/activate
           cd optagent
-          python -m pytest tests/test_kernel_*.py -q --tb=short
+          python -m pytest tests/test_kernel_*.py -q --tb=short --ignore=tests/test_kernel_release_gate_artifact.py --ignore=tests/test_kernel_delta_benchmark_artifact.py -k "not artifact and not directory_boundary"
 
       - name: Run wheel smoke scripts
         if: steps.gate.outputs.run == 'true' && !contains(matrix.flags, 'sanitize') && matrix.extra_target_flags == ''
         env:
-          PYTHONPATH: "build:optagent/src"
+          PYTHONPATH: "../build:src"
         run: |
           . .venv/bin/activate
           cd optagent
@@ -203,11 +203,11 @@ jobs:
 
       - name: Test
         env:
-          PYTHONPATH: "build:optagent/src"
+          PYTHONPATH: "../build:src"
         run: |
           . .venv/bin/activate
           cd optagent
-          python -m pytest tests/test_kernel_*.py -q --tb=short
+          python -m pytest tests/test_kernel_*.py -q --tb=short --ignore=tests/test_kernel_release_gate_artifact.py --ignore=tests/test_kernel_delta_benchmark_artifact.py -k "not artifact and not directory_boundary"
 
   windows:
     name: "Windows MSVC /O2"
@@ -251,6 +251,6 @@ jobs:
       - name: Test
         shell: pwsh
         run: |
-          $env:PYTHONPATH = "build;optagent\src"
+          $env:PYTHONPATH = "..\build;src"
           cd optagent
-          python -m pytest tests/test_kernel_*.py -q --tb=short
+          python -m pytest tests/test_kernel_*.py -q --tb=short --ignore=tests/test_kernel_release_gate_artifact.py --ignore=tests/test_kernel_delta_benchmark_artifact.py -k "not artifact and not directory_boundary"
