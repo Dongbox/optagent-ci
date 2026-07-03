@@ -157,6 +157,23 @@ jobs:
           cd optagent
           python -m pytest tests/test_kernel_determinism.py tests/test_kernel_smoke.py tests/test_kernel_validation.py tests/test_kernel_delta_regression.py -q --tb=short
 
+      - name: Auto-diagnose divergence
+        if: failure() && steps.gate.outputs.run == 'true'
+        env:
+          PYTHONPATH: "../build:src"
+        run: |
+          . .venv/bin/activate
+          cd optagent
+          python -m tests.diagnose_divergence --json || true
+
+      - name: Upload diagnosis report
+        if: failure() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: divergence-report-${{ matrix.name }}
+          path: optagent/tests/fixtures/determinism/reports/
+          if-no-files-found: ignore
+
       - name: Run wheel smoke scripts
         if: steps.gate.outputs.run == 'true' && !contains(matrix.flags, 'sanitize') && matrix.extra_target_flags == ''
         env:
@@ -209,6 +226,23 @@ jobs:
           cd optagent
           python -m pytest tests/test_kernel_determinism.py tests/test_kernel_smoke.py tests/test_kernel_validation.py tests/test_kernel_delta_regression.py -q --tb=short
 
+      - name: Auto-diagnose divergence
+        if: failure() && steps.gate.outputs.run == 'true'
+        env:
+          PYTHONPATH: "../build:src"
+        run: |
+          . .venv/bin/activate
+          cd optagent
+          python -m tests.diagnose_divergence --json || true
+
+      - name: Upload diagnosis report
+        if: failure() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: divergence-report-${{ matrix.name }}
+          path: optagent/tests/fixtures/determinism/reports/
+          if-no-files-found: ignore
+
   windows:
     name: "Windows MSVC /O2"
     runs-on: windows-latest
@@ -254,3 +288,20 @@ jobs:
           $env:PYTHONPATH = "..\build;src"
           cd optagent
           python -m pytest tests/test_kernel_determinism.py tests/test_kernel_smoke.py tests/test_kernel_validation.py tests/test_kernel_delta_regression.py -q --tb=short
+
+      - name: Auto-diagnose divergence
+        if: failure() && steps.gate.outputs.run == 'true'
+        env:
+          PYTHONPATH: "../build:src"
+        run: |
+          . .venv/bin/activate
+          cd optagent
+          python -m tests.diagnose_divergence --json || true
+
+      - name: Upload diagnosis report
+        if: failure() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: divergence-report-${{ matrix.name }}
+          path: optagent/tests/fixtures/determinism/reports/
+          if-no-files-found: ignore
