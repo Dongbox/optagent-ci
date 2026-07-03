@@ -1,0 +1,33 @@
+name: Dispatch Regression from Private Repo
+
+# Add this workflow to the PRIVATE optagent repo (.github/workflows/trigger-regression.yml)
+# It dispatches the public optagent-ci regression matrix on every push to main
+# that touches the C++ kernel.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cpp/**"
+      - "proto/**"
+      - "CMakeLists.txt"
+      - "tests/test_kernel_*.py"
+      - "tests/wheel_smoke_*.py"
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Trigger optagent-ci regression
+        run: |
+          gh workflow run kernel-regression.yml \
+            --repo Dongbox/optagent-ci \
+            --ref main \
+            -f ref=${{ github.sha }}
+        env:
+          GH_TOKEN: ${{ secrets.CI_DISPATCH_TOKEN }}
+          # CI_DISPATCH_TOKEN needs: Actions: Write on Dongbox/optagent-ci

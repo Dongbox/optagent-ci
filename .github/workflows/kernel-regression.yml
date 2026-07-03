@@ -1,0 +1,243 @@
+name: Kernel Regression Matrix
+
+on:
+  # Manual trigger with optional ref override
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "optagent commit SHA or branch to test"
+        required: false
+        default: "main"
+      full_matrix:
+        description: "Run full matrix (including LTO/weekly-only configs)"
+        type: boolean
+        default: false
+
+  # Weekly full matrix
+  schedule:
+    - cron: "0 6 * * 0"  # Sunday 06:00 UTC
+
+  # Push to this repo (e.g. workflow changes)
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/kernel-regression.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kernel-regression-${{ github.event.inputs.ref || 'main' }}
+  cancel-in-progress: true
+
+env:
+  OPTAGENT_REF: ${{ github.event.inputs.ref || 'main' }}
+
+jobs:
+  # ============================================================
+  # Linux: GCC + Clang matrix
+  # ============================================================
+  linux:
+    name: "Linux ${{ matrix.name }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # --- Always run (PR-gate level) ---
+          - name: "GCC 13 -O2"
+            cc: gcc-13
+            cxx: g++-13
+            flags: "-O2"
+            linker_flags: ""
+            weekly_only: false
+            packages: "g++-13"
+
+          - name: "Clang 18 -O2"
+            cc: clang-18
+            cxx: clang++-18
+            flags: "-O2"
+            linker_flags: ""
+            weekly_only: false
+            packages: "clang-18 libc++-18-dev libc++abi-18-dev"
+
+          - name: "GCC 13 ASan+UBSan"
+            cc: gcc-13
+            cxx: g++-13
+            flags: "-O1 -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
+            linker_flags: "-fsanitize=address,undefined"
+            weekly_only: false
+            packages: "g++-13"
+
+          # --- Weekly / full_matrix only ---
+          - name: "GCC 14 -O3 LTO"
+            cc: gcc-14
+            cxx: g++-14
+            flags: "-O3 -flto=auto"
+            linker_flags: "-flto=auto"
+            weekly_only: true
+            packages: "g++-14"
+
+          - name: "Clang 18 -O3 ThinLTO"
+            cc: clang-18
+            cxx: clang++-18
+            flags: "-O3 -flto=thin"
+            linker_flags: "-flto=thin -fuse-ld=lld"
+            weekly_only: true
+            packages: "clang-18 lld-18 libc++-18-dev libc++abi-18-dev"
+
+    steps:
+      - name: Skip weekly-only in non-full runs
+        id: should_skip
+        run: |
+          if [[ "${{ matrix.weekly_only }}" == "true" && "${{ github.event_name }}" != "schedule" && "${{ github.event.inputs.full_matrix }}" != "true" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install compiler toolchain
+        if: steps.should_skip.outputs.skip == 'false'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build cmake python3-dev python3-venv python3-pip git \
+            ${{ matrix.packages }}
+
+      - name: Clone optagent (private)
+        if: steps.should_skip.outputs.skip == 'false'
+        run: |
+          git clone --depth 1 --branch "${{ env.OPTAGENT_REF }}" \
+            "https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/Dongbox/optagent.git" \
+            optagent
+
+      - name: Set up Python venv
+        if: steps.should_skip.outputs.skip == 'false'
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install --upgrade pip
+          pip install pybind11 pytest protobuf numpy
+
+      - name: Configure CMake
+        if: steps.should_skip.outputs.skip == 'false'
+        run: |
+          . .venv/bin/activate
+          cmake -S optagent -B build -G Ninja \
+            -DCMAKE_C_COMPILER=${{ matrix.cc }} \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+            -DCMAKE_CXX_FLAGS="${{ matrix.flags }}" \
+            -DCMAKE_EXE_LINKER_FLAGS="${{ matrix.linker_flags }}" \
+            -DCMAKE_SHARED_LINKER_FLAGS="${{ matrix.linker_flags }}" \
+            -DCMAKE_MODULE_LINKER_FLAGS="${{ matrix.linker_flags }}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Build kernel extension
+        if: steps.should_skip.outputs.skip == 'false'
+        run: cmake --build build --target _optagent_native -j$(nproc)
+
+      - name: Run kernel regression tests
+        if: steps.should_skip.outputs.skip == 'false'
+        env:
+          PYTHONPATH: "build:optagent/src"
+          ASAN_OPTIONS: "detect_leaks=1:halt_on_error=1:strict_string_checks=1"
+          UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
+        run: |
+          . .venv/bin/activate
+          python -m pytest optagent/tests/test_kernel_*.py -q --tb=short
+
+      - name: Run wheel smoke scripts (non-sanitizer only)
+        if: steps.should_skip.outputs.skip == 'false' && !contains(matrix.flags, 'sanitize')
+        env:
+          PYTHONPATH: "build:optagent/src"
+        run: |
+          . .venv/bin/activate
+          for script in optagent/tests/wheel_smoke_*.py; do
+            echo "=== Running ${script} ==="
+            python "${script}" || exit 1
+          done
+
+  # ============================================================
+  # macOS: Apple Clang (weekly only)
+  # ============================================================
+  macos:
+    name: "macOS Apple Clang -O2"
+    runs-on: macos-latest
+    timeout-minutes: 60
+    if: github.event_name == 'schedule' || github.event.inputs.full_matrix == 'true'
+    steps:
+      - name: Clone optagent (private)
+        run: |
+          git clone --depth 1 --branch "${{ env.OPTAGENT_REF }}" \
+            "https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/Dongbox/optagent.git" \
+            optagent
+
+      - name: Setup
+        run: |
+          brew install ninja cmake
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install --upgrade pip
+          pip install pybind11 pytest protobuf numpy
+
+      - name: Build
+        run: |
+          . .venv/bin/activate
+          cmake -S optagent -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS="-O2"
+          cmake --build build --target _optagent_native -j$(sysctl -n hw.ncpu)
+
+      - name: Test
+        env:
+          PYTHONPATH: "build:optagent/src"
+        run: |
+          . .venv/bin/activate
+          python -m pytest optagent/tests/test_kernel_*.py -q --tb=short
+
+  # ============================================================
+  # Windows: MSVC (weekly only)
+  # ============================================================
+  windows:
+    name: "Windows MSVC /O2"
+    runs-on: windows-latest
+    timeout-minutes: 60
+    if: github.event_name == 'schedule' || github.event.inputs.full_matrix == 'true'
+    steps:
+      - name: Clone optagent (private)
+        shell: bash
+        run: |
+          git clone --depth 1 --branch "${OPTAGENT_REF}" \
+            "https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/Dongbox/optagent.git" \
+            optagent
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install deps
+        run: |
+          pip install --upgrade pip
+          pip install pybind11 pytest protobuf numpy ninja
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake -S optagent -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_CXX_FLAGS="/O2"
+          cmake --build build --target _optagent_native -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Test
+        shell: pwsh
+        env:
+          PYTHONPATH: "build;optagent\src"
+        run: python -m pytest optagent/tests/test_kernel_*.py -q --tb=short
