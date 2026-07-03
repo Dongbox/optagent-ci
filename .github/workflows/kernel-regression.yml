@@ -55,8 +55,10 @@ jobs:
           - name: "GCC 13 ASan+UBSan"
             cc: gcc-13
             cxx: g++-13
-            flags: "-O1 -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
+            # Only apply sanitizer to our code, not deps (via CMAKE_CXX_FLAGS_RELEASE override)
+            flags: "-O1"
             linker_flags: "-fsanitize=address,undefined"
+            extra_target_flags: "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
             weekly_only: "false"
             packages: "g++-13"
 
@@ -131,6 +133,15 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
+      - name: Apply sanitizer flags to target (ASan only)
+        if: steps.gate.outputs.run == 'true' && matrix.extra_target_flags != ''
+        run: |
+          # Patch CMakeCache to add sanitizer flags only to _optagent_native target
+          # This avoids breaking abseil/protobuf builds with sanitizer constexpr issues
+          cat >> build/CMakeCache.txt << 'PATCH'
+          PATCH
+          echo 'target_compile_options(_optagent_native PRIVATE ${{ matrix.extra_target_flags }})' >> optagent/CMakeLists.txt
+
       - name: Build kernel extension
         if: steps.gate.outputs.run == 'true'
         run: cmake --build build --target _optagent_native -j$(nproc)
@@ -143,15 +154,17 @@ jobs:
           UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
         run: |
           . .venv/bin/activate
-          python -m pytest optagent/tests/test_kernel_*.py -q --tb=short
+          cd optagent
+          python -m pytest tests/test_kernel_*.py -q --tb=short
 
       - name: Run wheel smoke scripts
-        if: steps.gate.outputs.run == 'true' && !contains(matrix.flags, 'sanitize')
+        if: steps.gate.outputs.run == 'true' && !contains(matrix.flags, 'sanitize') && matrix.extra_target_flags == ''
         env:
           PYTHONPATH: "build:optagent/src"
         run: |
           . .venv/bin/activate
-          for script in optagent/tests/wheel_smoke_*.py; do
+          cd optagent
+          for script in tests/wheel_smoke_*.py; do
             echo "=== Running ${script} ==="
             python "${script}" || exit 1
           done
@@ -193,7 +206,8 @@ jobs:
           PYTHONPATH: "build:optagent/src"
         run: |
           . .venv/bin/activate
-          python -m pytest optagent/tests/test_kernel_*.py -q --tb=short
+          cd optagent
+          python -m pytest tests/test_kernel_*.py -q --tb=short
 
   windows:
     name: "Windows MSVC /O2"
@@ -238,4 +252,5 @@ jobs:
         shell: pwsh
         run: |
           $env:PYTHONPATH = "build;optagent\src"
-          python -m pytest optagent/tests/test_kernel_*.py -q --tb=short
+          cd optagent
+          python -m pytest tests/test_kernel_*.py -q --tb=short
