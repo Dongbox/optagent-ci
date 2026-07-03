@@ -8,7 +8,7 @@ on:
         required: false
         default: "main"
       full_matrix:
-        description: "Run full matrix (including LTO/weekly-only configs)"
+        description: "Run full matrix including LTO and cross-platform"
         type: boolean
         default: false
 
@@ -24,17 +24,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: kernel-regression-${{ inputs.ref || 'main' }}
+  group: kernel-regression
   cancel-in-progress: true
 
-env:
-  OPTAGENT_REF: ${{ inputs.ref || 'main' }}
-  FULL_MATRIX: ${{ inputs.full_matrix == true || github.event_name == 'schedule' }}
-
 jobs:
-  # ============================================================
-  # Linux: GCC + Clang matrix
-  # ============================================================
   linux:
     name: "Linux ${{ matrix.name }}"
     runs-on: ubuntu-latest
@@ -48,7 +41,7 @@ jobs:
             cxx: g++-13
             flags: "-O2"
             linker_flags: ""
-            weekly_only: false
+            weekly_only: "false"
             packages: "g++-13"
 
           - name: "Clang 18 -O2"
@@ -56,7 +49,7 @@ jobs:
             cxx: clang++-18
             flags: "-O2"
             linker_flags: ""
-            weekly_only: false
+            weekly_only: "false"
             packages: "clang-18 libc++-18-dev libc++abi-18-dev"
 
           - name: "GCC 13 ASan+UBSan"
@@ -64,7 +57,7 @@ jobs:
             cxx: g++-13
             flags: "-O1 -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
             linker_flags: "-fsanitize=address,undefined"
-            weekly_only: false
+            weekly_only: "false"
             packages: "g++-13"
 
           - name: "GCC 14 -O3 LTO"
@@ -72,7 +65,7 @@ jobs:
             cxx: g++-14
             flags: "-O3 -flto=auto"
             linker_flags: "-flto=auto"
-            weekly_only: true
+            weekly_only: "true"
             packages: "g++-14"
 
           - name: "Clang 18 -O3 ThinLTO"
@@ -80,14 +73,18 @@ jobs:
             cxx: clang++-18
             flags: "-O3 -flto=thin"
             linker_flags: "-flto=thin -fuse-ld=lld"
-            weekly_only: true
+            weekly_only: "true"
             packages: "clang-18 lld-18 libc++-18-dev libc++abi-18-dev"
 
     steps:
       - name: Determine if this config should run
         id: gate
+        shell: bash
         run: |
-          if [[ "${{ matrix.weekly_only }}" == "true" && "${{ env.FULL_MATRIX }}" != "true" ]]; then
+          WEEKLY_ONLY="${{ matrix.weekly_only }}"
+          EVENT="${{ github.event_name }}"
+          FULL="${{ github.event.inputs.full_matrix }}"
+          if [[ "$WEEKLY_ONLY" == "true" && "$EVENT" != "schedule" && "$FULL" != "true" ]]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
@@ -104,7 +101,9 @@ jobs:
       - name: Clone optagent (private)
         if: steps.gate.outputs.run == 'true'
         run: |
-          git clone --depth 1 --branch "${{ env.OPTAGENT_REF }}" \
+          REF="${{ github.event.inputs.ref }}"
+          REF="${REF:-main}"
+          git clone --depth 1 --branch "$REF" \
             "https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/Dongbox/optagent.git" \
             optagent
 
@@ -123,10 +122,10 @@ jobs:
           cmake -S optagent -B build -G Ninja \
             -DCMAKE_C_COMPILER=${{ matrix.cc }} \
             -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
-            -DCMAKE_CXX_FLAGS="${{ matrix.flags }}" \
-            -DCMAKE_EXE_LINKER_FLAGS="${{ matrix.linker_flags }}" \
-            -DCMAKE_SHARED_LINKER_FLAGS="${{ matrix.linker_flags }}" \
-            -DCMAKE_MODULE_LINKER_FLAGS="${{ matrix.linker_flags }}" \
+            "-DCMAKE_CXX_FLAGS=${{ matrix.flags }}" \
+            "-DCMAKE_EXE_LINKER_FLAGS=${{ matrix.linker_flags }}" \
+            "-DCMAKE_SHARED_LINKER_FLAGS=${{ matrix.linker_flags }}" \
+            "-DCMAKE_MODULE_LINKER_FLAGS=${{ matrix.linker_flags }}" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
@@ -144,7 +143,7 @@ jobs:
           . .venv/bin/activate
           python -m pytest optagent/tests/test_kernel_*.py -q --tb=short
 
-      - name: Run wheel smoke scripts (non-sanitizer only)
+      - name: Run wheel smoke scripts
         if: steps.gate.outputs.run == 'true' && !contains(matrix.flags, 'sanitize')
         env:
           PYTHONPATH: "build:optagent/src"
@@ -155,18 +154,17 @@ jobs:
             python "${script}" || exit 1
           done
 
-  # ============================================================
-  # macOS: Apple Clang (weekly / full_matrix only)
-  # ============================================================
   macos:
     name: "macOS Apple Clang -O2"
     runs-on: macos-latest
     timeout-minutes: 60
-    if: inputs.full_matrix == true || github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.full_matrix == 'true')
     steps:
       - name: Clone optagent (private)
         run: |
-          git clone --depth 1 --branch "${{ env.OPTAGENT_REF }}" \
+          REF="${{ github.event.inputs.ref }}"
+          REF="${REF:-main}"
+          git clone --depth 1 --branch "$REF" \
             "https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/Dongbox/optagent.git" \
             optagent
 
@@ -193,23 +191,22 @@ jobs:
           . .venv/bin/activate
           python -m pytest optagent/tests/test_kernel_*.py -q --tb=short
 
-  # ============================================================
-  # Windows: MSVC (weekly / full_matrix only)
-  # ============================================================
   windows:
     name: "Windows MSVC /O2"
     runs-on: windows-latest
     timeout-minutes: 60
-    if: inputs.full_matrix == true || github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.full_matrix == 'true')
     steps:
       - name: Clone optagent (private)
         shell: bash
         run: |
-          git clone --depth 1 --branch "$OPTAGENT_REF" \
-            "https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/Dongbox/optagent.git" \
+          REF="${{ github.event.inputs.ref }}"
+          REF="${REF:-main}"
+          git clone --depth 1 --branch "$REF" \
+            "https://x-access-token:${PAT}@github.com/Dongbox/optagent.git" \
             optagent
         env:
-          OPTAGENT_REF: ${{ inputs.ref || 'main' }}
+          PAT: ${{ secrets.PRIVATE_REPO_PAT }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -229,13 +226,11 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          cmake -S optagent -B build -G Ninja `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_CXX_FLAGS="/O2"
+          cmake -S optagent -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_FLAGS=/O2"
           cmake --build build --target _optagent_native -j $env:NUMBER_OF_PROCESSORS
 
       - name: Test
         shell: pwsh
-        env:
-          PYTHONPATH: "build;optagent\src"
-        run: python -m pytest optagent/tests/test_kernel_*.py -q --tb=short
+        run: |
+          $env:PYTHONPATH = "build;optagent\src"
+          python -m pytest optagent/tests/test_kernel_*.py -q --tb=short
