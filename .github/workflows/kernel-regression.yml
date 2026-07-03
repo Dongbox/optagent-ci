@@ -219,6 +219,12 @@ jobs:
           UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
         run: |
           . .venv/bin/activate
+          # ASan-compiled shared libraries loaded via dlopen require the runtime
+          # to be first in the library list. LD_PRELOAD ensures this for Python.
+          if [[ "${{ matrix.extra_target_flags }}" == *"sanitize"* ]]; then
+            ASAN_LIB=$(${{ matrix.cxx }} -print-file-name=libasan.so)
+            export LD_PRELOAD="$ASAN_LIB"
+          fi
           cd optagent
           python -m pytest tests/test_kernel_determinism.py tests/test_kernel_smoke.py tests/test_kernel_validation.py tests/test_kernel_delta_regression.py -q --tb=short
 
@@ -228,6 +234,10 @@ jobs:
           PYTHONPATH: "../build:src"
         run: |
           . .venv/bin/activate
+          if [[ "${{ matrix.extra_target_flags }}" == *"sanitize"* ]]; then
+            ASAN_LIB=$(${{ matrix.cxx }} -print-file-name=libasan.so)
+            export LD_PRELOAD="$ASAN_LIB"
+          fi
           cd optagent
           python -m tests.diagnose_divergence --json || true
 
