@@ -12,7 +12,7 @@ on:
       ref:
         description: "optagent commit SHA or branch"
         required: false
-        default: "master"
+        default: "cpp-python-boundary-redesign"
 
 permissions:
   contents: read
