@@ -6,7 +6,7 @@ on:
       ref:
         description: "optagent commit SHA or branch to test"
         required: false
-        default: "main"
+        default: "master"
       full_matrix:
         description: "Run full matrix including LTO and cross-platform"
         type: boolean
@@ -102,7 +102,7 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         run: |
           REF="${{ github.event.inputs.ref }}"
-          REF="${REF:-main}"
+          REF="${REF:-master}"
           git clone --depth 1 --branch "$REF" \
             "https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/Dongbox/optagent.git" \
             optagent
@@ -163,7 +163,7 @@ jobs:
       - name: Clone optagent (private)
         run: |
           REF="${{ github.event.inputs.ref }}"
-          REF="${REF:-main}"
+          REF="${REF:-master}"
           git clone --depth 1 --branch "$REF" \
             "https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/Dongbox/optagent.git" \
             optagent
@@ -201,7 +201,7 @@ jobs:
         shell: bash
         run: |
           REF="${{ github.event.inputs.ref }}"
-          REF="${REF:-main}"
+          REF="${REF:-master}"
           git clone --depth 1 --branch "$REF" \
             "https://x-access-token:${PAT}@github.com/Dongbox/optagent.git" \
             optagent

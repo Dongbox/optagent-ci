@@ -12,7 +12,7 @@ on:
       ref:
         description: "optagent commit SHA or branch"
         required: false
-        default: "main"
+        default: "master"
 
 permissions:
   contents: read
