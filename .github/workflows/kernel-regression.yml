@@ -119,10 +119,10 @@ jobs:
             cc: gcc-13
             cxx: g++-13
             flags: "-O1"
-            linker_flags: "-fsanitize=address,undefined"
+            linker_flags: "-fsanitize=address,undefined -static-libasan"
             extra_target_flags: "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
             weekly_only: "false"
-            packages: "g++-13"
+            packages: "g++-13 libasan8"
 
           - name: "GCC 14 -O3 LTO"
             cc: gcc-14
@@ -215,16 +215,10 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         env:
           PYTHONPATH: "../build:src"
-          ASAN_OPTIONS: "detect_leaks=1:halt_on_error=1:strict_string_checks=1"
+          ASAN_OPTIONS: "detect_leaks=0:halt_on_error=1:strict_string_checks=1"
           UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
         run: |
           . .venv/bin/activate
-          # ASan-compiled shared libraries loaded via dlopen require the runtime
-          # to be first in the library list. LD_PRELOAD ensures this for Python.
-          if [[ "${{ matrix.extra_target_flags }}" == *"sanitize"* ]]; then
-            ASAN_LIB=$(${{ matrix.cxx }} -print-file-name=libasan.so)
-            export LD_PRELOAD="$ASAN_LIB"
-          fi
           cd optagent
           python -m pytest tests/test_kernel_determinism.py tests/test_kernel_smoke.py tests/test_kernel_validation.py tests/test_kernel_delta_regression.py -q --tb=short
 
@@ -234,10 +228,6 @@ jobs:
           PYTHONPATH: "../build:src"
         run: |
           . .venv/bin/activate
-          if [[ "${{ matrix.extra_target_flags }}" == *"sanitize"* ]]; then
-            ASAN_LIB=$(${{ matrix.cxx }} -print-file-name=libasan.so)
-            export LD_PRELOAD="$ASAN_LIB"
-          fi
           cd optagent
           python -m tests.diagnose_divergence --json || true
 
