@@ -1,7 +1,6 @@
 name: Kernel Regression Matrix
 
 on:
-  # Manual trigger with optional ref override
   workflow_dispatch:
     inputs:
       ref:
@@ -13,11 +12,9 @@ on:
         type: boolean
         default: false
 
-  # Weekly full matrix
   schedule:
-    - cron: "0 6 * * 0"  # Sunday 06:00 UTC
+    - cron: "0 6 * * 0"
 
-  # Push to this repo (e.g. workflow changes)
   push:
     branches: [main]
     paths:
@@ -27,11 +24,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: kernel-regression-${{ github.event.inputs.ref || 'main' }}
+  group: kernel-regression-${{ inputs.ref || 'main' }}
   cancel-in-progress: true
 
 env:
-  OPTAGENT_REF: ${{ github.event.inputs.ref || 'main' }}
+  OPTAGENT_REF: ${{ inputs.ref || 'main' }}
+  FULL_MATRIX: ${{ inputs.full_matrix == true || github.event_name == 'schedule' }}
 
 jobs:
   # ============================================================
@@ -45,7 +43,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # --- Always run (PR-gate level) ---
           - name: "GCC 13 -O2"
             cc: gcc-13
             cxx: g++-13
@@ -70,7 +67,6 @@ jobs:
             weekly_only: false
             packages: "g++-13"
 
-          # --- Weekly / full_matrix only ---
           - name: "GCC 14 -O3 LTO"
             cc: gcc-14
             cxx: g++-14
@@ -88,17 +84,17 @@ jobs:
             packages: "clang-18 lld-18 libc++-18-dev libc++abi-18-dev"
 
     steps:
-      - name: Skip weekly-only in non-full runs
-        id: should_skip
+      - name: Determine if this config should run
+        id: gate
         run: |
-          if [[ "${{ matrix.weekly_only }}" == "true" && "${{ github.event_name }}" != "schedule" && "${{ github.event.inputs.full_matrix }}" != "true" ]]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
+          if [[ "${{ matrix.weekly_only }}" == "true" && "${{ env.FULL_MATRIX }}" != "true" ]]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
           else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "run=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Install compiler toolchain
-        if: steps.should_skip.outputs.skip == 'false'
+        if: steps.gate.outputs.run == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -106,14 +102,14 @@ jobs:
             ${{ matrix.packages }}
 
       - name: Clone optagent (private)
-        if: steps.should_skip.outputs.skip == 'false'
+        if: steps.gate.outputs.run == 'true'
         run: |
           git clone --depth 1 --branch "${{ env.OPTAGENT_REF }}" \
             "https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/Dongbox/optagent.git" \
             optagent
 
       - name: Set up Python venv
-        if: steps.should_skip.outputs.skip == 'false'
+        if: steps.gate.outputs.run == 'true'
         run: |
           python3 -m venv .venv
           . .venv/bin/activate
@@ -121,7 +117,7 @@ jobs:
           pip install pybind11 pytest protobuf numpy
 
       - name: Configure CMake
-        if: steps.should_skip.outputs.skip == 'false'
+        if: steps.gate.outputs.run == 'true'
         run: |
           . .venv/bin/activate
           cmake -S optagent -B build -G Ninja \
@@ -135,11 +131,11 @@ jobs:
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
       - name: Build kernel extension
-        if: steps.should_skip.outputs.skip == 'false'
+        if: steps.gate.outputs.run == 'true'
         run: cmake --build build --target _optagent_native -j$(nproc)
 
       - name: Run kernel regression tests
-        if: steps.should_skip.outputs.skip == 'false'
+        if: steps.gate.outputs.run == 'true'
         env:
           PYTHONPATH: "build:optagent/src"
           ASAN_OPTIONS: "detect_leaks=1:halt_on_error=1:strict_string_checks=1"
@@ -149,7 +145,7 @@ jobs:
           python -m pytest optagent/tests/test_kernel_*.py -q --tb=short
 
       - name: Run wheel smoke scripts (non-sanitizer only)
-        if: steps.should_skip.outputs.skip == 'false' && !contains(matrix.flags, 'sanitize')
+        if: steps.gate.outputs.run == 'true' && !contains(matrix.flags, 'sanitize')
         env:
           PYTHONPATH: "build:optagent/src"
         run: |
@@ -160,13 +156,13 @@ jobs:
           done
 
   # ============================================================
-  # macOS: Apple Clang (weekly only)
+  # macOS: Apple Clang (weekly / full_matrix only)
   # ============================================================
   macos:
     name: "macOS Apple Clang -O2"
     runs-on: macos-latest
     timeout-minutes: 60
-    if: github.event_name == 'schedule' || github.event.inputs.full_matrix == 'true'
+    if: inputs.full_matrix == true || github.event_name == 'schedule'
     steps:
       - name: Clone optagent (private)
         run: |
@@ -198,20 +194,22 @@ jobs:
           python -m pytest optagent/tests/test_kernel_*.py -q --tb=short
 
   # ============================================================
-  # Windows: MSVC (weekly only)
+  # Windows: MSVC (weekly / full_matrix only)
   # ============================================================
   windows:
     name: "Windows MSVC /O2"
     runs-on: windows-latest
     timeout-minutes: 60
-    if: github.event_name == 'schedule' || github.event.inputs.full_matrix == 'true'
+    if: inputs.full_matrix == true || github.event_name == 'schedule'
     steps:
       - name: Clone optagent (private)
         shell: bash
         run: |
-          git clone --depth 1 --branch "${OPTAGENT_REF}" \
+          git clone --depth 1 --branch "$OPTAGENT_REF" \
             "https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/Dongbox/optagent.git" \
             optagent
+        env:
+          OPTAGENT_REF: ${{ inputs.ref || 'main' }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -241,4 +239,3 @@ jobs:
         env:
           PYTHONPATH: "build;optagent\src"
         run: python -m pytest optagent/tests/test_kernel_*.py -q --tb=short
-
