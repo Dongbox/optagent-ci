@@ -119,7 +119,9 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         run: |
           . .venv/bin/activate
+          PYBIND11_DIR=$(python3 -m pybind11 --cmakedir)
           cmake -S optagent -B build -G Ninja \
+            -Dpybind11_DIR="$PYBIND11_DIR" \
             -DCMAKE_C_COMPILER=${{ matrix.cc }} \
             -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             "-DCMAKE_CXX_FLAGS=${{ matrix.flags }}" \
@@ -179,7 +181,9 @@ jobs:
       - name: Build
         run: |
           . .venv/bin/activate
+          PYBIND11_DIR=$(python3 -m pybind11 --cmakedir)
           cmake -S optagent -B build -G Ninja \
+            -Dpybind11_DIR="$PYBIND11_DIR" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_FLAGS="-O2"
           cmake --build build --target _optagent_native -j$(sysctl -n hw.ncpu)
@@ -226,7 +230,8 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          cmake -S optagent -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_FLAGS=/O2"
+          $pybind11Dir = python -m pybind11 --cmakedir
+          cmake -S optagent -B build -G Ninja -Dpybind11_DIR="$pybind11Dir" -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_FLAGS=/O2"
           cmake --build build --target _optagent_native -j $env:NUMBER_OF_PROCESSORS
 
       - name: Test
