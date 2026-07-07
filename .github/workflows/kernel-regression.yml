@@ -76,7 +76,7 @@ jobs:
         run: |
           . .venv/bin/activate
           cd optagent
-          python -m pytest tests/test_kernel_determinism.py -q --tb=short
+          python -m pytest tests/regression/determinism/test_determinism.py -q --tb=short
           echo "Generated golden fixtures:"
           find tests/fixtures/determinism/ -name "*.json" | sort
 
@@ -220,7 +220,12 @@ jobs:
         run: |
           . .venv/bin/activate
           cd optagent
-          python -m pytest tests/test_kernel_determinism.py tests/test_kernel_smoke.py tests/test_kernel_validation.py tests/test_kernel_delta_regression.py -q --tb=short
+          python -m pytest \
+            tests/regression/determinism/test_determinism.py \
+            tests/regression/kernel_delta/test_behavior.py \
+            tests/unit/kernel/test_smoke.py \
+            tests/unit/kernel/test_validation.py \
+            -q --tb=short
 
       - name: Auto-diagnose divergence
         if: failure() && steps.gate.outputs.run == 'true'
@@ -229,14 +234,16 @@ jobs:
         run: |
           . .venv/bin/activate
           cd optagent
-          python -m tests.diagnose_divergence --json || true
+          python scripts/dev/diagnose_divergence.py --json || true
 
       - name: Upload diagnosis report
         if: failure() && steps.gate.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: divergence-report-${{ matrix.name }}
-          path: optagent/tests/fixtures/determinism/reports/
+          path: |
+            optagent/tests/fixtures/determinism/reports/
+            optagent/tests/regression/determinism/fixtures/determinism/reports/
           if-no-files-found: ignore
 
   # ============================================================
@@ -280,8 +287,8 @@ jobs:
         run: |
           . .venv/bin/activate
           cd optagent
-          python -m pytest tests/test_kernel_determinism.py -q --tb=short -k "self_consistency"
-          python -m pytest tests/test_kernel_smoke.py tests/test_kernel_validation.py -q --tb=short
+          python -m pytest tests/regression/determinism/test_determinism.py -q --tb=short -k "self_consistency"
+          python -m pytest tests/unit/kernel/test_smoke.py tests/unit/kernel/test_validation.py -q --tb=short
 
   # ============================================================
   # Windows: MSVC (weekly / full_matrix only)
@@ -330,5 +337,5 @@ jobs:
         run: |
           $env:PYTHONPATH = "..\build;optagent\src"
           cd optagent
-          python -m pytest tests/test_kernel_determinism.py -q --tb=short -k "self_consistency"
-          python -m pytest tests/test_kernel_smoke.py tests/test_kernel_validation.py -q --tb=short
+          python -m pytest tests/regression/determinism/test_determinism.py -q --tb=short -k "self_consistency"
+          python -m pytest tests/unit/kernel/test_smoke.py tests/unit/kernel/test_validation.py -q --tb=short

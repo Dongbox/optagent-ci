@@ -11,8 +11,12 @@ on:
       - "cpp/**"
       - "proto/**"
       - "CMakeLists.txt"
-      - "tests/test_kernel_*.py"
-      - "tests/wheel_smoke_*.py"
+      - "tests/regression/determinism/**"
+      - "tests/regression/kernel_delta/**"
+      - "tests/unit/kernel/**"
+      - "tests/unit/proto/test_roundtrip.py"
+      - "tests/smoke/wheel/**"
+      - "scripts/dev/diagnose_divergence.py"
 
 permissions:
   contents: read

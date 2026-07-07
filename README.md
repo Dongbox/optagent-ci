@@ -33,7 +33,7 @@ The key guarantee: **same architecture + same seed → same result, regardless o
                                 │ on failure
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Auto-diagnosis: tests/diagnose_divergence.py                       │
+│  Auto-diagnosis: scripts/dev/diagnose_divergence.py                 │
 │  → Re-runs with iteration trace (Layer 2)                          │
 │  → Binary-searches first divergence point                          │
 │  → Classifies root cause (rng_drift / evaluation_path / ...)       │

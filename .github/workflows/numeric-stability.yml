@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 env:
-  OPTAGENT_REF: ${{ github.event.inputs.ref || 'main' }}
+  OPTAGENT_REF: ${{ github.event.inputs.ref || 'cpp-python-boundary-redesign' }}
 
 jobs:
   numeric-stability:
@@ -45,7 +45,9 @@ jobs:
           . .venv/bin/activate
           pip install --upgrade pip
           pip install pybind11 pytest protobuf numpy ortools
+          PYBIND11_DIR=$(python3 -m pybind11 --cmakedir)
           cmake -S optagent -B build -G Ninja \
+            -Dpybind11_DIR="$PYBIND11_DIR" \
             -DCMAKE_C_COMPILER=gcc-13 \
             -DCMAKE_CXX_COMPILER=g++-13 \
             -DCMAKE_CXX_FLAGS="-O2" \
@@ -57,13 +59,20 @@ jobs:
           PYTHONPATH: "build:optagent/src"
         run: |
           . .venv/bin/activate
-          python -m pytest optagent/tests/test_kernel_*.py -q --tb=short -k "regression or determinism or roundtrip"
+          python -m pytest optagent/tests/regression/determinism/test_determinism.py -q --tb=short -k "self_consistency"
+          python -m pytest \
+            optagent/tests/regression/kernel_delta/test_behavior.py \
+            optagent/tests/unit/kernel/test_smoke.py \
+            optagent/tests/unit/kernel/test_validation.py \
+            optagent/tests/unit/proto/test_roundtrip.py \
+            -q --tb=short
 
       - name: Run benchmark smoke (fixed seed)
         env:
           PYTHONPATH: "build:optagent/src"
         run: |
           . .venv/bin/activate
-          python optagent/tests/wheel_smoke_solve.py
-          python optagent/tests/wheel_smoke_delta.py
-          python optagent/tests/wheel_smoke_strategy.py
+          python optagent/tests/smoke/wheel/smoke_solve.py
+          python optagent/tests/smoke/wheel/smoke_strategy.py
+          python optagent/tests/smoke/wheel/smoke_validation.py
+          python optagent/tests/smoke/wheel/smoke_diagnostics.py
