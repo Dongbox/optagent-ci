@@ -1,135 +1,91 @@
 # optagent-ci
 
-Public CI harness for [optagent](https://github.com/Dongbox/optagent) kernel regression testing.
+External regression harness for the OptAgent native kernel.
 
-## Purpose
+## Guarantees
 
-This repository runs cross-compiler determinism regression tests against the private `optagent` C++ kernel using **free** GitHub Actions minutes (public repos have unlimited standard runner minutes).
+The harness enforces two different reproducibility contracts:
 
-The key guarantee: **same architecture + same seed → same result, regardless of compiler (GCC vs Clang vs MSVC).**
+- The same binary, problem, seed, and iteration budget must produce an identical complete snapshot.
+- Different compilers must produce semantically equivalent results. Feasibility, replay validation, status category, and objective value are gating; assignments, iteration counts, and search traces are diagnostic.
 
-## CI Architecture
+Integer objectives compare exactly. Floating objectives use `abs_tol=1e-9` and `rel_tol=1e-9`.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Phase 1: Generate golden fixtures (GCC 13, x86_64)                │
-│  → Builds kernel, runs solve cases with fixed seeds                │
-│  → Saves results as golden fixtures (artifact)                     │
-└───────────────────────────────┬─────────────────────────────────────┘
-                                │ artifact: golden-fixtures-x86_64
-                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  Phase 2: Cross-compiler verification (same x86_64 architecture)   │
-│                                                                     │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │
-│  │ GCC 13 -O2   │  │ Clang 18 -O2 │  │ GCC 13 ASan+UBSan       │  │
-│  │ (baseline)   │  │ (cross-check)│  │ (memory safety)          │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────────┬───────────────┘  │
-│         │                  │                     │                   │
-│         ▼                  ▼                     ▼                   │
-│  Compare against golden: must be bit-exact                          │
-│  Any difference = compiler-induced UB or non-determinism bug        │
-└───────────────────────────────┬─────────────────────────────────────┘
-                                │ on failure
-                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  Auto-diagnosis: scripts/dev/diagnose_divergence.py                 │
-│  → Re-runs with iteration trace (Layer 2)                          │
-│  → Binary-searches first divergence point                          │
-│  → Classifies root cause (rng_drift / evaluation_path / ...)       │
-│  → Outputs report + uploads as artifact                            │
-└─────────────────────────────────────────────────────────────────────┘
-```
+## Fast Gate
 
-## Test Matrix
+Relevant OptAgent changes dispatch an exact 40-character commit SHA.
 
-| Platform | Compiler | Optimization | Trigger | Verification |
-|----------|----------|-------------|---------|--------------|
-| Linux x86_64 | GCC 13 | -O2 | always | golden generation + comparison |
-| Linux x86_64 | Clang 18 | -O2 | always | comparison against golden |
-| Linux x86_64 | GCC 13 | -O1 + ASan+UBSan | always | comparison + memory safety |
-| Linux x86_64 | GCC 14 | -O3 -flto | weekly | comparison against golden |
-| Linux x86_64 | Clang 18 | -O3 -flto=thin | weekly | comparison against golden |
-| macOS arm64 | Apple Clang | -O2 | weekly | self-consistency only |
-| Windows x64 | MSVC 2022 | /O2 | weekly | self-consistency only |
+1. GCC 13 builds the extension and C++ tests.
+2. CTest runs the native owner suite.
+3. Pytest runs regression, kernel-contract, and representative public solve tests.
+4. GCC produces a JSON semantic snapshot.
+5. Clang 18 builds the same SHA and produces another snapshot.
+6. `scripts/compare_snapshots.py` applies the semantic comparison contract.
+7. The workflow writes `optagent-ci/regression` back to the tested OptAgent commit.
 
-### Verification Levels
+## Weekly Full Matrix
 
-- **Golden comparison** (Linux x86_64): fixed seed → exact match on objective value, variable assignments, and iteration count. Any difference between GCC and Clang indicates a real bug (UB, uninitialized memory, or non-deterministic code path).
-- **Self-consistency** (macOS/Windows): same-process repeated solve must produce identical results. Does not compare against x86_64 golden because cross-architecture differences are expected (platform-dependent `std::hash`, `std::uniform_int_distribution`).
+The Sunday schedule resolves the current OptAgent `main` SHA and additionally runs:
 
-## Divergence Diagnosis Report Format
+| Platform | Configuration |
+| --- | --- |
+| Linux | GCC 13 with ASan and UBSan |
+| Linux | GCC 14 with `-O3` and LTO |
+| Linux | Clang 18 with `-O3` and ThinLTO |
+| macOS arm64 | Apple Clang Release |
+| Windows x64 | MSVC Release |
 
-When tests fail, the auto-diagnosis generates a JSON report (`diagnosis.json`) with this structure:
+Each platform runs CTest and fixed-seed self-consistency. Linux variants also compare their semantic snapshots with the GCC fast baseline.
 
-```json
-{
-  "timestamp": "2026-07-03 05:06:17 UTC",
-  "environment": {
-    "platform": "Linux",
-    "arch": "x86_64",
-    "python": "3.12.3"
-  },
-  "cases": [
-    {
-      "case_name": "tsp_5_ga_seed42",
-      "has_divergence": true,
-      "classification": {
-        "category": "rng_drift | evaluation_path | search_depth | termination_timing | solution_symmetry",
-        "confidence": "high | medium | low",
-        "summary": "Human-readable one-line conclusion",
-        "evidence": ["Supporting observations..."],
-        "code_locations": ["cpp/file.cc — what to investigate"],
-        "suggested_actions": ["Step-by-step debugging guide"]
-      },
-      "golden": {"objective_value": 19.0, "iterations": 373},
-      "actual": {"objective_value": 19.0, "iterations": 389}
-    }
-  ],
-  "overall_conclusion": "Cross-case summary...",
-  "cross_case_pattern": "GA-only | ALNS-only | shared infrastructure"
-}
+Performance regression remains owned by `optagent-benchmarks`.
+
+## OptAgent Contract
+
+OptAgent owns the scenarios and native replay logic in:
+
+```text
+scripts/tests/regression_snapshot.py
+tests/python/regression/
+tests/python/integration/kernel_contract/
+tests/cpp/
 ```
 
-### Diagnosis Categories
+This repository owns compiler/platform orchestration, semantic comparison, artifacts, and commit-status reporting.
 
-| Category | Meaning | Typical Root Cause |
-|----------|---------|-------------------|
-| `rng_drift` | RNG state diverged between compilers | Conditional RNG consumption, uninitialized branch |
-| `evaluation_path` | Same operator, different score | Floating-point UB, unordered container iteration |
-| `search_depth` | Construct/seeding phase differs | Platform-dependent initialization |
-| `termination_timing` | Different iteration count, same objective | Construct-phase iteration counting |
-| `solution_symmetry` | Same objective, different variables | Multiple optima (acceptable) |
+## Required Secrets
 
-## Setup
+Use fine-grained tokens with only the listed permissions.
 
-### 1. Create a fine-grained PAT
+### In `Dongbox/optagent`
 
-- GitHub → Settings → Developer settings → Fine-grained personal access tokens
-- Scope: `Dongbox/optagent` only
-- Permissions: `Contents: Read`
+`OPTAGENT_CI_TOKEN`:
 
-### 2. Add the secret
+- Repository: `Dongbox/optagent-ci`
+- Actions: write
 
-- This repo → Settings → Secrets → Actions → `PRIVATE_REPO_PAT`
+The repository `GITHUB_TOKEN` writes pending or not-applicable status to its own commit.
 
-### 3. (Optional) Trigger from private repo
+### In `Dongbox/optagent-ci`
 
-```yaml
-# In private repo: .github/workflows/trigger-regression.yml
-- name: Trigger regression CI
-  run: |
-    gh workflow run kernel-regression.yml \
-      --repo Dongbox/optagent-ci \
-      --ref main \
-      -f ref=${{ github.sha }}
-  env:
-    GH_TOKEN: ${{ secrets.CI_DISPATCH_TOKEN }}
+`OPTAGENT_REPO_TOKEN`:
+
+- Repository: `Dongbox/optagent`
+- Contents: read
+- Commit statuses: write
+
+Checkout uses `persist-credentials: false`. Workflows accept only commits that belong to `Dongbox/optagent`.
+
+## Required-Check Enforcement
+
+The workflow always publishes the `optagent-ci/regression` commit status. To make it a merge-blocking required check, protect the OptAgent `main` branch and require that status context.
+
+At the time this harness was updated, `Dongbox/optagent` was a private repository on a GitHub plan that did not expose branch protection or repository rulesets. In that configuration the status is advisory, not merge-blocking. Upgrade the plan or make the repository public before claiming enforcement.
+
+## Local Validation
+
+```bash
+python3 -m unittest discover -s tests -v
+python3 scripts/compare_snapshots.py \
+  --baseline /path/to/gcc.json \
+  --candidate /path/to/clang.json
 ```
-
-## Security
-
-- PAT has read-only access to the private repo
-- Secrets never exposed to fork PRs (GitHub default)
-- Build logs contain compiler output only, not source code
-- macOS/Windows jobs only run self-consistency (no golden fixture download)

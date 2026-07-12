@@ -1,37 +1,41 @@
-name: Dispatch Regression from Private Repo
+name: Trigger External Regression
 
-# Add this workflow to the PRIVATE optagent repo (.github/workflows/trigger-regression.yml)
-# It dispatches the public optagent-ci regression matrix on every push to main
-# that touches the C++ kernel.
+# Reference copy. The maintained workflow lives in the optagent repository at
+# .github/workflows/trigger-regression.yml.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "cpp/**"
-      - "proto/**"
-      - "CMakeLists.txt"
-      - "tests/regression/determinism/**"
-      - "tests/regression/kernel_delta/**"
-      - "tests/unit/kernel/**"
-      - "tests/unit/proto/test_roundtrip.py"
-      - "tests/smoke/wheel/**"
-      - "scripts/dev/diagnose_divergence.py"
+  workflow_dispatch:
+    inputs:
+      optagent_sha:
+        description: Full 40-character optagent commit SHA
+        required: true
+        type: string
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   dispatch:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
     steps:
-      - name: Trigger optagent-ci regression
+      - name: Mark pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.optagent_sha }}
         run: |
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
+            -f state=pending \
+            -f context=optagent-ci/regression \
+            -f description="Dispatching external regression matrix"
+      - name: Dispatch exact SHA
+        env:
+          GH_TOKEN: ${{ secrets.OPTAGENT_CI_TOKEN }}
+          SHA: ${{ inputs.optagent_sha }}
+        run: |
+          [[ "${SHA}" =~ ^[0-9a-fA-F]{40}$ ]]
           gh workflow run kernel-regression.yml \
             --repo Dongbox/optagent-ci \
             --ref main \
-            -f ref=${{ github.sha }}
-        env:
-          GH_TOKEN: ${{ secrets.CI_DISPATCH_TOKEN }}
-          # CI_DISPATCH_TOKEN needs: Actions: Write on Dongbox/optagent-ci
+            -f optagent_sha="${SHA}" \
+            -f full_matrix=false

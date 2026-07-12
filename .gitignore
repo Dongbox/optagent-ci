@@ -1,2 +1,4 @@
 # optagent-ci
 
+__pycache__/
+*.py[cod]
