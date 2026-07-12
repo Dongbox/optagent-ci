@@ -16,6 +16,20 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertNotIn("tests/regression/", WORKFLOW)
         self.assertNotIn("GENERATE_GOLDEN", WORKFLOW)
 
+    def test_python_path_exposes_optagent_root_for_shared_test_helpers(self) -> None:
+        self.assertIn(
+            "${{ github.workspace }}/optagent:${{ github.workspace }}/optagent/src",
+            WORKFLOW,
+        )
+        self.assertIn(
+            "${GITHUB_WORKSPACE}/optagent:${GITHUB_WORKSPACE}/optagent/src",
+            WORKFLOW,
+        )
+        self.assertIn(
+            "$env:GITHUB_WORKSPACE\\optagent;$env:GITHUB_WORKSPACE\\optagent\\src",
+            WORKFLOW,
+        )
+
     def test_runs_native_owner_tests_and_instruments_core_via_global_flags(self) -> None:
         self.assertIn("-DOPTAGENT_BUILD_CPP_TESTS=ON", WORKFLOW)
         self.assertIn("ctest --test-dir build/gcc-fast --output-on-failure", WORKFLOW)
@@ -28,6 +42,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("persist-credentials: false", WORKFLOW)
         self.assertIn("optagent-ci/regression", WORKFLOW)
         self.assertIn("repos/Dongbox/optagent/statuses/${SHA}", WORKFLOW)
+        self.assertIn("Fail workflow when regression failed", WORKFLOW)
 
     def test_weekly_macos_job_requires_arm64(self) -> None:
         self.assertIn("runs-on: macos-14", WORKFLOW)

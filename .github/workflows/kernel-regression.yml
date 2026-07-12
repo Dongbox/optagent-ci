@@ -125,7 +125,7 @@ jobs:
         run: ctest --test-dir build/gcc-fast --output-on-failure
       - name: Run Python regression and contracts
         env:
-          PYTHONPATH: ${{ github.workspace }}/build/gcc-fast:${{ github.workspace }}/optagent/src
+          PYTHONPATH: ${{ github.workspace }}/build/gcc-fast:${{ github.workspace }}/optagent:${{ github.workspace }}/optagent/src
         run: |
           . .venv/bin/activate
           python -m pytest -q \
@@ -135,7 +135,7 @@ jobs:
             --tb=short
       - name: Generate GCC semantic snapshot
         env:
-          PYTHONPATH: ${{ github.workspace }}/build/gcc-fast:${{ github.workspace }}/optagent/src
+          PYTHONPATH: ${{ github.workspace }}/build/gcc-fast:${{ github.workspace }}/optagent:${{ github.workspace }}/optagent/src
         run: |
           . .venv/bin/activate
           python optagent/scripts/tests/regression_snapshot.py --output artifacts/gcc/snapshot.json
@@ -183,7 +183,7 @@ jobs:
           cmake --build build/clang-fast --target _optagent_native -j"$(nproc)"
       - name: Generate Clang semantic snapshot
         env:
-          PYTHONPATH: ${{ github.workspace }}/build/clang-fast:${{ github.workspace }}/optagent/src
+          PYTHONPATH: ${{ github.workspace }}/build/clang-fast:${{ github.workspace }}/optagent:${{ github.workspace }}/optagent/src
         run: |
           . .venv/bin/activate
           python optagent/scripts/tests/regression_snapshot.py --output artifacts/clang/snapshot.json
@@ -274,7 +274,7 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=0:halt_on_error=1:strict_string_checks=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-          PYTHONPATH: ${{ github.workspace }}/build/linux-full:${{ github.workspace }}/optagent/src
+          PYTHONPATH: ${{ github.workspace }}/build/linux-full:${{ github.workspace }}/optagent:${{ github.workspace }}/optagent/src
         run: |
           ctest --test-dir build/linux-full --output-on-failure
           . .venv/bin/activate
@@ -332,9 +332,9 @@ jobs:
             -DOPTAGENT_BUILD_CPP_TESTS=ON
           cmake --build build/macos -j"$(sysctl -n hw.ncpu)"
           ctest --test-dir build/macos --output-on-failure
-          PYTHONPATH="${GITHUB_WORKSPACE}/build/macos:${GITHUB_WORKSPACE}/optagent/src" \
+          PYTHONPATH="${GITHUB_WORKSPACE}/build/macos:${GITHUB_WORKSPACE}/optagent:${GITHUB_WORKSPACE}/optagent/src" \
             python -m pytest -q optagent/tests/python/regression --tb=short
-          PYTHONPATH="${GITHUB_WORKSPACE}/build/macos:${GITHUB_WORKSPACE}/optagent/src" \
+          PYTHONPATH="${GITHUB_WORKSPACE}/build/macos:${GITHUB_WORKSPACE}/optagent:${GITHUB_WORKSPACE}/optagent/src" \
             python optagent/scripts/tests/regression_snapshot.py --output artifacts/macos/snapshot.json
       - uses: actions/upload-artifact@v4
         with:
@@ -378,7 +378,7 @@ jobs:
           cmake -S optagent -B build/windows -G Ninja -Dpybind11_DIR="$pybind11Dir" -DCMAKE_BUILD_TYPE=Release -DOPTAGENT_BUILD_CPP_TESTS=ON
           cmake --build build/windows -j $env:NUMBER_OF_PROCESSORS
           ctest --test-dir build/windows --output-on-failure
-          $env:PYTHONPATH = "$env:GITHUB_WORKSPACE\build\windows;$env:GITHUB_WORKSPACE\optagent\src"
+          $env:PYTHONPATH = "$env:GITHUB_WORKSPACE\build\windows;$env:GITHUB_WORKSPACE\optagent;$env:GITHUB_WORKSPACE\optagent\src"
           python -m pytest -q optagent/tests/python/regression --tb=short
           python optagent/scripts/tests/regression_snapshot.py --output artifacts/windows/snapshot.json
       - uses: actions/upload-artifact@v4
@@ -422,4 +422,6 @@ jobs:
             -f context="${STATUS_CONTEXT}" \
             -f description="${DESCRIPTION}" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          [[ "${STATE}" == "success" ]]
+      - name: Fail workflow when regression failed
+        if: steps.result.outputs.state != 'success'
+        run: exit 1
