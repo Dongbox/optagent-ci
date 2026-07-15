@@ -267,7 +267,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -348,7 +348,7 @@ jobs:
             --output-dir evidence/benchmark-linux-full-shard-${{ matrix.shard }} \
             --scope linux-full \
             --shard-index ${{ matrix.shard }} \
-            --shard-count 2
+            --shard-count 8
       - name: Write shard evidence manifest
         if: always()
         env:
@@ -371,7 +371,7 @@ jobs:
               "schema_version": 1,
               "scope": "linux-full",
               "shard_index": int(os.environ["SHARD_INDEX"]),
-              "shard_count": 2,
+              "shard_count": 8,
               "platform": platform.platform(),
               "machine": platform.machine(),
               "python": sys.version,
