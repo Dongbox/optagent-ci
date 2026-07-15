@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-validation-${{ inputs.optagent_sha }}
+  group: release-validation-${{ inputs.optagent_sha }}-${{ github.sha }}
   cancel-in-progress: false
 
 env:
