@@ -79,6 +79,20 @@ def _coordinates(plan: dict[str, Any], scope: str) -> list[dict[str, Any]]:
     return coordinates
 
 
+def _shard_coordinates(
+    coordinates: list[dict[str, Any]], *, shard_index: int, shard_count: int
+) -> list[dict[str, Any]]:
+    if shard_count < 1:
+        raise ValueError("shard_count must be at least 1")
+    if not 0 <= shard_index < shard_count:
+        raise ValueError("shard_index must be between 0 and shard_count - 1")
+    return [
+        coordinate
+        for position, coordinate in enumerate(coordinates)
+        if position % shard_count == shard_index
+    ]
+
+
 def run_release_benchmarks(
     *,
     python: Path,
@@ -87,6 +101,8 @@ def run_release_benchmarks(
     data_manifest_path: Path,
     output_dir: Path,
     scope: str,
+    shard_index: int = 0,
+    shard_count: int = 1,
 ) -> dict[str, Any]:
     python = Path(os.path.abspath(python))
     benchmark_root = benchmark_root.resolve()
@@ -115,7 +131,12 @@ def run_release_benchmarks(
         row["benchmark_id"]: row for row in json.loads(inventory_process.stdout)
     }
     results: list[dict[str, Any]] = []
-    for coordinate in _coordinates(plan, scope):
+    coordinates = _shard_coordinates(
+        _coordinates(plan, scope),
+        shard_index=shard_index,
+        shard_count=shard_count,
+    )
+    for coordinate in coordinates:
         case = inventory[coordinate["benchmark_id"]]
         budget = _budget(case)
         style_label = str(coordinate["model_style"] or "default").replace("/", "-")
@@ -194,6 +215,9 @@ def run_release_benchmarks(
     summary = {
         "schema_version": 1,
         "scope": scope,
+        "shard_index": shard_index,
+        "shard_count": shard_count,
+        "coordinate_count": len(coordinates),
         "result_counts": {
             status: sum(result["status"] == status for result in results)
             for status in sorted({result["status"] for result in results})
@@ -333,6 +357,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--scope", choices=("representative", "linux-full"), default="representative"
     )
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--shard-count", type=int, default=1)
     args = parser.parse_args(argv)
     summary = run_release_benchmarks(
         python=args.python,
@@ -341,6 +367,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         data_manifest_path=args.data_manifest,
         output_dir=args.output_dir,
         scope=args.scope,
+        shard_index=args.shard_index,
+        shard_count=args.shard_count,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 1 if summary["result_counts"].get("FAIL", 0) else 0

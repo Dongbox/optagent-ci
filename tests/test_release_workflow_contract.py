@@ -30,7 +30,7 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
             WORKFLOW.count(
                 "git -C optagent submodule update --init --depth 1 benchmarks"
             ),
-            4,
+            5,
         )
 
     def test_release_validation_builds_two_wheels_and_never_uploads_validation_wheels(
@@ -44,6 +44,9 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
             WORKFLOW,
         )
         self.assertIn("Remove validation signing material", WORKFLOW)
+        self.assertIn("Remove shard validation signing material", WORKFLOW)
+        self.assertIn("shard: [0, 1]", WORKFLOW)
+        self.assertIn("--shard-count 2", WORKFLOW)
 
     def test_release_validation_uses_offline_benchmark_plan_and_hard_timeout_driver(
         self,
@@ -70,7 +73,7 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
 
     def test_benchmarks_reuse_the_installed_license_configuration(self) -> None:
         self.assertEqual(
-            WORKFLOW.count('export XDG_CONFIG_HOME="${HOME}/.config"'), 7
+            WORKFLOW.count('export XDG_CONFIG_HOME="${HOME}/.config"'), 8
         )
 
     def test_regression_workflow_uses_current_kernel_target(self) -> None:

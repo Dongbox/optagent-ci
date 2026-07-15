@@ -210,20 +210,6 @@ jobs:
             --data-manifest prepared/data-manifest.json \
             --output-dir evidence/benchmark-representative \
             --scope representative
-      - id: full
-        name: Run Linux full benchmark inventory
-        continue-on-error: true
-        run: |
-          source "${RUNNER_TEMP}/validation-venv/bin/activate"
-          export HOME="${RUNNER_TEMP}/validation-home"
-          export XDG_CONFIG_HOME="${HOME}/.config"
-          python scripts/run_release_benchmarks.py \
-            --python "${RUNNER_TEMP}/validation-venv/bin/python" \
-            --benchmark-root optagent/benchmarks \
-            --plan prepared/release-plan.json \
-            --data-manifest prepared/data-manifest.json \
-            --output-dir evidence/benchmark-linux-full \
-            --scope linux-full
       - id: release
         name: Validate release wheel rejection path
         continue-on-error: true
@@ -270,10 +256,158 @@ jobs:
         env:
           API: ${{ steps.api.outcome }}
           REPRESENTATIVE: ${{ steps.representative.outcome }}
-          FULL: ${{ steps.full.outcome }}
           RELEASE: ${{ steps.release.outcome }}
         run: |
-          [[ "${API}" == success && "${REPRESENTATIVE}" == success && "${FULL}" == success && "${RELEASE}" == success ]]
+          [[ "${API}" == success && "${REPRESENTATIVE}" == success && "${RELEASE}" == success ]]
+
+  linux-full:
+    needs: [resolve, prepare-data]
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Dongbox/optagent
+          ref: ${{ needs.resolve.outputs.sha }}
+          token: ${{ secrets.OPTAGENT_REPO_TOKEN }}
+          persist-credentials: false
+          path: optagent
+      - name: Initialize benchmark submodule
+        run: git -C optagent submodule update --init --depth 1 benchmarks
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-validation-data-${{ needs.resolve.outputs.sha }}
+          path: prepared
+      - name: Restore fixed benchmark data
+        run: tar -xzf prepared/benchmark-data.tgz -C optagent/benchmarks
+      - name: Generate shard validation key
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip cryptography
+          mkdir -p "${RUNNER_TEMP}/validation-key" evidence
+          python optagent/scripts/release/validation_license.py generate-key \
+            --private-key "${RUNNER_TEMP}/validation-key/private.json" \
+            --metadata "${RUNNER_TEMP}/validation-key/metadata.json" \
+            --key-id "validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-linux-full-${{ matrix.shard }}"
+          python - <<'PY' >> "${GITHUB_ENV}"
+          import json
+          from pathlib import Path
+          validation = json.loads((Path("${{ runner.temp }}") / "validation-key/metadata.json").read_text())
+          print(f"VALIDATION_KEY_ID={validation['key_id']}")
+          print(f"VALIDATION_PUBLIC_KEY_HEX={validation['public_key_hex']}")
+          PY
+      - name: Build shard validation wheel
+        run: |
+          set -euo pipefail
+          cd optagent
+          OPTAGENT_ENABLE_LICENSE=ON \
+          OPTAGENT_LICENSE_KEY_ID="${VALIDATION_KEY_ID}" \
+          OPTAGENT_LICENSE_PUBLIC_KEY_HEX="${VALIDATION_PUBLIC_KEY_HEX}" \
+          PYTHON_TAG=cp312-cp312 \
+          OUT_DIR="${GITHUB_WORKSPACE}/optagent/dist/release-validation-linux-full-${{ matrix.shard }}" \
+          SKBUILD_BUILD_DIR=build/release-validation-linux-full-${{ matrix.shard }} \
+            scripts/release/build_manylinux2014_wheel.sh
+      - name: Install shard validation wheel and issue runner-bound license
+        run: |
+          set -euo pipefail
+          python -m venv "${RUNNER_TEMP}/validation-venv"
+          source "${RUNNER_TEMP}/validation-venv/bin/activate"
+          python -m pip install --upgrade pip
+          python -m pip install optagent/dist/release-validation-linux-full-${{ matrix.shard }}/optagent-*.whl ortools cryptography
+          export HOME="${RUNNER_TEMP}/validation-home"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          cd "${RUNNER_TEMP}"
+          python -m optagent.license request --output license-request.json
+          python "${GITHUB_WORKSPACE}/optagent/scripts/release/validation_license.py" issue \
+            --private-key "${RUNNER_TEMP}/validation-key/private.json" \
+            --request license-request.json \
+            --output validation.license
+          python -m optagent.license install validation.license
+          python -m optagent.license status
+      - id: full
+        name: Run Linux full benchmark inventory shard ${{ matrix.shard }}
+        continue-on-error: true
+        run: |
+          source "${RUNNER_TEMP}/validation-venv/bin/activate"
+          export HOME="${RUNNER_TEMP}/validation-home"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          python scripts/run_release_benchmarks.py \
+            --python "${RUNNER_TEMP}/validation-venv/bin/python" \
+            --benchmark-root optagent/benchmarks \
+            --plan prepared/release-plan.json \
+            --data-manifest prepared/data-manifest.json \
+            --output-dir evidence/benchmark-linux-full-shard-${{ matrix.shard }} \
+            --scope linux-full \
+            --shard-index ${{ matrix.shard }} \
+            --shard-count 2
+      - name: Write shard evidence manifest
+        if: always()
+        env:
+          SHARD_INDEX: ${{ matrix.shard }}
+        run: |
+          validation_wheel=(optagent/dist/release-validation-linux-full-${{ matrix.shard }}/optagent-*.whl)
+          python - "${validation_wheel[0]}" <<'PY'
+          import hashlib
+          import json
+          import os
+          import platform
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          wheel = Path(sys.argv[1])
+          optagent = Path("optagent")
+          data_manifest = Path("prepared/data-manifest.json")
+          payload = {
+              "schema_version": 1,
+              "scope": "linux-full",
+              "shard_index": int(os.environ["SHARD_INDEX"]),
+              "shard_count": 2,
+              "platform": platform.platform(),
+              "machine": platform.machine(),
+              "python": sys.version,
+              "optagent_commit": subprocess.check_output(
+                  ["git", "-C", str(optagent), "rev-parse", "HEAD"], text=True
+              ).strip(),
+              "benchmarks_commit": subprocess.check_output(
+                  ["git", "-C", str(optagent / "benchmarks"), "rev-parse", "HEAD"], text=True
+              ).strip(),
+              "validation_wheel": {
+                  "filename": wheel.name,
+                  "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
+                  "key_id": os.environ["VALIDATION_KEY_ID"],
+                  "published": False,
+              },
+              "data_manifest_sha256": hashlib.sha256(data_manifest.read_bytes()).hexdigest(),
+          }
+          Path("evidence/shard-manifest.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-validation-linux-full-${{ matrix.shard }}-${{ needs.resolve.outputs.sha }}
+          path: evidence
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove shard validation signing material
+        if: always()
+        run: rm -rf "${RUNNER_TEMP}/validation-key" "${RUNNER_TEMP}/validation-home" optagent/dist/release-validation-linux-full-${{ matrix.shard }}
+      - name: Fail when Linux full shard validation failed
+        if: always()
+        env:
+          FULL: ${{ steps.full.outcome }}
+        run: '[[ "${FULL}" == success ]]'
 
   macos:
     needs: [resolve, prepare-data]
@@ -564,7 +698,7 @@ jobs:
 
   report:
     if: always()
-    needs: [resolve, harness-tests, prepare-data, linux, macos, windows]
+    needs: [resolve, harness-tests, prepare-data, linux, linux-full, macos, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -583,7 +717,7 @@ jobs:
           from pathlib import Path
           needs = json.loads(os.environ["NEEDS_JSON"])
           rows = []
-          for name in ("harness-tests", "prepare-data", "linux", "macos", "windows"):
+          for name in ("harness-tests", "prepare-data", "linux", "linux-full", "macos", "windows"):
               result = needs[name]["result"]
               if result != "success":
                   rows.append({"scenario": f"job:{name}", "status": "FAIL", "reason": result})

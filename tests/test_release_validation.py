@@ -13,11 +13,33 @@ from scripts.aggregate_release_validation import aggregate
 from scripts.run_release_benchmarks import (
     _classify_process,
     _run_process_tree,
+    _shard_coordinates,
     verify_data_manifest,
 )
 
 
 class ReleaseValidationTest(unittest.TestCase):
+    def test_benchmark_shards_partition_coordinates_without_overlap(self) -> None:
+        coordinates = [{"id": index} for index in range(11)]
+
+        shards = [
+            _shard_coordinates(coordinates, shard_index=index, shard_count=2)
+            for index in range(2)
+        ]
+
+        self.assertEqual([row["id"] for row in shards[0]], [0, 2, 4, 6, 8, 10])
+        self.assertEqual([row["id"] for row in shards[1]], [1, 3, 5, 7, 9])
+        self.assertEqual(
+            sorted(row["id"] for shard in shards for row in shard),
+            list(range(11)),
+        )
+
+    def test_benchmark_shards_reject_invalid_bounds(self) -> None:
+        with self.assertRaisesRegex(ValueError, "shard_count"):
+            _shard_coordinates([], shard_index=0, shard_count=0)
+        with self.assertRaisesRegex(ValueError, "shard_index"):
+            _shard_coordinates([], shard_index=2, shard_count=2)
+
     def test_benchmark_process_requires_feasible_verified_rows(self) -> None:
         process = subprocess.CompletedProcess(
             args=[],
