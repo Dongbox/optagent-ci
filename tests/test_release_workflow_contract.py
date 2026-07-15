@@ -50,11 +50,11 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         self.assertIn("Remove validation signing material", WORKFLOW)
         self.assertIn("Remove shard validation signing material", WORKFLOW)
         self.assertIn(
-            'default: "[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]"',
+            'default: "[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]"',
             WORKFLOW,
         )
         self.assertIn("shard: ${{ fromJSON(inputs.linux_full_shards) }}", WORKFLOW)
-        self.assertIn("--shard-count 16", WORKFLOW)
+        self.assertIn("--shard-count 32", WORKFLOW)
         self.assertIn("retry_linux_full_only:", WORKFLOW)
         self.assertEqual(
             WORKFLOW.count('if: ${{ !inputs.retry_linux_full_only }}'), 4
