@@ -1,0 +1,609 @@
+name: OptAgent Release Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      optagent_sha:
+        description: Full 40-character OptAgent commit SHA to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-validation-${{ inputs.optagent_sha }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  STATUS_CONTEXT: optagent-ci/release-validation
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - id: resolve
+        name: Validate exact OptAgent revision
+        env:
+          GH_TOKEN: ${{ secrets.OPTAGENT_REPO_TOKEN }}
+          SHA: ${{ inputs.optagent_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "optagent_sha must be a full 40-character commit SHA" >&2
+            exit 2
+          fi
+          gh api "repos/Dongbox/optagent/commits/${SHA}" --silent
+          echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
+      - name: Mark release validation pending
+        env:
+          GH_TOKEN: ${{ secrets.OPTAGENT_REPO_TOKEN }}
+          SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          gh api --method POST "repos/Dongbox/optagent/statuses/${SHA}" \
+            -f state=pending \
+            -f context="${STATUS_CONTEXT}" \
+            -f description="Cross-platform release validation is running" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+  harness-tests:
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: python -m unittest discover -s tests -v
+
+  prepare-data:
+    needs: [resolve, harness-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Dongbox/optagent
+          ref: ${{ needs.resolve.outputs.sha }}
+          token: ${{ secrets.OPTAGENT_REPO_TOKEN }}
+          persist-credentials: false
+          submodules: recursive
+          path: optagent
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Prepare fixed offline benchmark data
+        env:
+          PYTHONPATH: ${{ github.workspace }}/optagent/src
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install 'protobuf>=6.33,<7.0'
+          mkdir -p prepared
+          python optagent/benchmarks/benchmark.py release-plan \
+            --prepare-data \
+            --output prepared/release-plan.json \
+            --data-manifest prepared/data-manifest.json
+          tar -czf prepared/benchmark-data.tgz -C optagent/benchmarks benchmarks/cases
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-validation-data-${{ needs.resolve.outputs.sha }}
+          path: prepared
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    needs: [resolve, prepare-data]
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Dongbox/optagent
+          ref: ${{ needs.resolve.outputs.sha }}
+          token: ${{ secrets.OPTAGENT_REPO_TOKEN }}
+          persist-credentials: false
+          submodules: recursive
+          path: optagent
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-validation-data-${{ needs.resolve.outputs.sha }}
+          path: prepared
+      - name: Restore fixed benchmark data
+        run: tar -xzf prepared/benchmark-data.tgz -C optagent/benchmarks
+      - name: Generate validation key and load release public key
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip cryptography
+          mkdir -p "${RUNNER_TEMP}/validation-key" evidence
+          python optagent/scripts/release/validation_license.py generate-key \
+            --private-key "${RUNNER_TEMP}/validation-key/private.json" \
+            --metadata "${RUNNER_TEMP}/validation-key/metadata.json" \
+            --key-id "validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-linux"
+          python - <<'PY' >> "${GITHUB_ENV}"
+          import json
+          from pathlib import Path
+          validation = json.loads((Path("${{ runner.temp }}") / "validation-key/metadata.json").read_text())
+          [release_path] = Path("optagent/tools/license-issuer").glob("*.public-key.json")
+          release = json.loads(release_path.read_text())
+          print(f"VALIDATION_KEY_ID={validation['key_id']}")
+          print(f"VALIDATION_PUBLIC_KEY_HEX={validation['public_key_hex']}")
+          print(f"RELEASE_KEY_ID={release['key_id']}")
+          print(f"RELEASE_PUBLIC_KEY_HEX={release['public_key_hex']}")
+          PY
+      - name: Build validation and release wheels
+        run: |
+          set -euo pipefail
+          cd optagent
+          rm -rf dist/release-validation-linux
+          OPTAGENT_ENABLE_LICENSE=ON \
+          OPTAGENT_LICENSE_KEY_ID="${VALIDATION_KEY_ID}" \
+          OPTAGENT_LICENSE_PUBLIC_KEY_HEX="${VALIDATION_PUBLIC_KEY_HEX}" \
+          PYTHON_TAG=cp312-cp312 \
+          OUT_DIR="${GITHUB_WORKSPACE}/optagent/dist/release-validation-linux/validation" \
+          SKBUILD_BUILD_DIR=build/release-validation-linux-validation \
+            scripts/release/build_manylinux2014_wheel.sh
+          OPTAGENT_ENABLE_LICENSE=ON \
+          OPTAGENT_LICENSE_KEY_ID="${RELEASE_KEY_ID}" \
+          OPTAGENT_LICENSE_PUBLIC_KEY_HEX="${RELEASE_PUBLIC_KEY_HEX}" \
+          PYTHON_TAG=cp312-cp312 \
+          OUT_DIR="${GITHUB_WORKSPACE}/optagent/dist/release-validation-linux/release" \
+          SKBUILD_BUILD_DIR=build/release-validation-linux-release \
+            scripts/release/build_manylinux2014_wheel.sh
+      - name: Install validation wheel and issue runner-bound license
+        run: |
+          set -euo pipefail
+          python -m venv "${RUNNER_TEMP}/validation-venv"
+          source "${RUNNER_TEMP}/validation-venv/bin/activate"
+          python -m pip install --upgrade pip
+          python -m pip install optagent/dist/release-validation-linux/validation/optagent-*.whl ortools cryptography
+          export HOME="${RUNNER_TEMP}/validation-home"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          cd "${RUNNER_TEMP}"
+          python -m optagent.license request --output license-request.json
+          python "${GITHUB_WORKSPACE}/optagent/scripts/release/validation_license.py" issue \
+            --private-key "${RUNNER_TEMP}/validation-key/private.json" \
+            --request license-request.json \
+            --output validation.license
+          python -m optagent.license install validation.license
+          python -m optagent.license status
+      - id: api
+        name: Run installed-wheel public API validation
+        continue-on-error: true
+        run: |
+          set +e
+          source "${RUNNER_TEMP}/validation-venv/bin/activate"
+          export HOME="${RUNNER_TEMP}/validation-home"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          export OPTAGENT_RELEASE_VALIDATION_REQUIRE_INSTALLED=1
+          export OPTAGENT_RELEASE_VALIDATION_REPRO_DIR="${GITHUB_WORKSPACE}/evidence/reproductions"
+          cd "${RUNNER_TEMP}"
+          python "${GITHUB_WORKSPACE}/optagent/scripts/release/public_api_validation.py" \
+            --allowlist "${GITHUB_WORKSPACE}/optagent/docs/site/public-api-allowlist.txt" \
+            --output-dir "${GITHUB_WORKSPACE}/evidence/api" \
+            --include-solver
+          status=$?
+          printf '%s\n' '{"scenario":"release_wheel_positive_license","status":"NOT_COVERED","reason":"release wheel was not exercised with a production-signed license"}' >> "${GITHUB_WORKSPACE}/evidence/api/results.jsonl"
+          exit ${status}
+      - id: representative
+        name: Run representative benchmark matrix
+        continue-on-error: true
+        run: |
+          source "${RUNNER_TEMP}/validation-venv/bin/activate"
+          export HOME="${RUNNER_TEMP}/validation-home"
+          python scripts/run_release_benchmarks.py \
+            --python "${RUNNER_TEMP}/validation-venv/bin/python" \
+            --benchmark-root optagent/benchmarks \
+            --plan prepared/release-plan.json \
+            --data-manifest prepared/data-manifest.json \
+            --output-dir evidence/benchmark-representative \
+            --scope representative
+      - id: full
+        name: Run Linux full benchmark inventory
+        continue-on-error: true
+        run: |
+          source "${RUNNER_TEMP}/validation-venv/bin/activate"
+          export HOME="${RUNNER_TEMP}/validation-home"
+          python scripts/run_release_benchmarks.py \
+            --python "${RUNNER_TEMP}/validation-venv/bin/python" \
+            --benchmark-root optagent/benchmarks \
+            --plan prepared/release-plan.json \
+            --data-manifest prepared/data-manifest.json \
+            --output-dir evidence/benchmark-linux-full \
+            --scope linux-full
+      - id: release
+        name: Validate release wheel rejection path
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p evidence/release
+          python -m venv "${RUNNER_TEMP}/release-venv"
+          source "${RUNNER_TEMP}/release-venv/bin/activate"
+          python -m pip install --upgrade pip
+          python -m pip install optagent/dist/release-validation-linux/release/optagent-*.whl
+          cd "${RUNNER_TEMP}"
+          python "${GITHUB_WORKSPACE}/optagent/tests/smoke/wheel/smoke_license_gate.py" > "${GITHUB_WORKSPACE}/evidence/release/smoke.log" 2>&1
+          status=$?
+          if [[ ${status} -eq 0 ]]; then result=PASS; else result=FAIL; fi
+          printf '{"scenario":"release_wheel_rejection","status":"%s"}\n' "${result}" > "${GITHUB_WORKSPACE}/evidence/release/results.jsonl"
+          exit ${status}
+      - name: Write evidence manifest
+        if: always()
+        run: |
+          validation_wheel=(optagent/dist/release-validation-linux/validation/optagent-*.whl)
+          release_wheel=(optagent/dist/release-validation-linux/release/optagent-*.whl)
+          python scripts/write_release_manifest.py \
+            --output evidence/manifest.json \
+            --optagent-root optagent \
+            --validation-wheel "${validation_wheel[0]}" \
+            --release-wheel "${release_wheel[0]}" \
+            --data-manifest prepared/data-manifest.json \
+            --validation-key-id "${VALIDATION_KEY_ID}" \
+            --release-key-id "${RELEASE_KEY_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-validation-linux-${{ needs.resolve.outputs.sha }}
+          path: |
+            evidence
+            optagent/dist/release-validation-linux/release/optagent-*.whl
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove validation signing material
+        if: always()
+        run: rm -rf "${RUNNER_TEMP}/validation-key" "${RUNNER_TEMP}/validation-home" optagent/dist/release-validation-linux/validation
+      - name: Fail when Linux validation failed
+        if: always()
+        env:
+          API: ${{ steps.api.outcome }}
+          REPRESENTATIVE: ${{ steps.representative.outcome }}
+          FULL: ${{ steps.full.outcome }}
+          RELEASE: ${{ steps.release.outcome }}
+        run: |
+          [[ "${API}" == success && "${REPRESENTATIVE}" == success && "${FULL}" == success && "${RELEASE}" == success ]]
+
+  macos:
+    needs: [resolve, prepare-data]
+    runs-on: macos-14
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Dongbox/optagent
+          ref: ${{ needs.resolve.outputs.sha }}
+          token: ${{ secrets.OPTAGENT_REPO_TOKEN }}
+          persist-credentials: false
+          submodules: recursive
+          path: optagent
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-validation-data-${{ needs.resolve.outputs.sha }}
+          path: prepared
+      - run: tar -xzf prepared/benchmark-data.tgz -C optagent/benchmarks
+      - name: Prepare build and signing context
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          brew install ninja cmake
+          python -m pip install --upgrade pip build scikit-build-core pybind11 setuptools wheel ninja cryptography
+          mkdir -p "${RUNNER_TEMP}/validation-key" evidence optagent/dist/release-validation-macos/validation optagent/dist/release-validation-macos/release
+          python optagent/scripts/release/validation_license.py generate-key \
+            --private-key "${RUNNER_TEMP}/validation-key/private.json" \
+            --metadata "${RUNNER_TEMP}/validation-key/metadata.json" \
+            --key-id "validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-macos"
+          python - <<'PY' >> "${GITHUB_ENV}"
+          import json
+          from pathlib import Path
+          validation = json.loads((Path("${{ runner.temp }}") / "validation-key/metadata.json").read_text())
+          [release_path] = Path("optagent/tools/license-issuer").glob("*.public-key.json")
+          release = json.loads(release_path.read_text())
+          print(f"VALIDATION_KEY_ID={validation['key_id']}")
+          print(f"VALIDATION_PUBLIC_KEY_HEX={validation['public_key_hex']}")
+          print(f"RELEASE_KEY_ID={release['key_id']}")
+          print(f"RELEASE_PUBLIC_KEY_HEX={release['public_key_hex']}")
+          PY
+      - name: Build validation and release wheels
+        run: |
+          set -euo pipefail
+          cd optagent
+          validation_args="-GNinja;-DOPTAGENT_ENABLE_LICENSE=ON;-DOPTAGENT_LICENSE_KEY_ID=${VALIDATION_KEY_ID};-DOPTAGENT_LICENSE_PUBLIC_KEY_HEX=${VALIDATION_PUBLIC_KEY_HEX}"
+          release_args="-GNinja;-DOPTAGENT_ENABLE_LICENSE=ON;-DOPTAGENT_LICENSE_KEY_ID=${RELEASE_KEY_ID};-DOPTAGENT_LICENSE_PUBLIC_KEY_HEX=${RELEASE_PUBLIC_KEY_HEX}"
+          python -m pip wheel . -w dist/release-validation-macos/validation --no-deps \
+            -Cbuild-dir=build/release-validation-macos-validation "-Ccmake.args=${validation_args}"
+          python -m pip wheel . -w dist/release-validation-macos/release --no-deps \
+            -Cbuild-dir=build/release-validation-macos-release "-Ccmake.args=${release_args}"
+          python scripts/release/check_license_wheel.py --wheel dist/release-validation-macos/validation/optagent-*.whl \
+            --expected-key-id "${VALIDATION_KEY_ID}" --expected-public-key-hex "${VALIDATION_PUBLIC_KEY_HEX}"
+          python scripts/release/check_license_wheel.py --wheel dist/release-validation-macos/release/optagent-*.whl \
+            --expected-key-id "${RELEASE_KEY_ID}" --expected-public-key-hex "${RELEASE_PUBLIC_KEY_HEX}"
+      - name: Install validation wheel and issue runner-bound license
+        run: |
+          python -m venv "${RUNNER_TEMP}/validation-venv"
+          source "${RUNNER_TEMP}/validation-venv/bin/activate"
+          python -m pip install --upgrade pip
+          python -m pip install optagent/dist/release-validation-macos/validation/optagent-*.whl ortools cryptography
+          export HOME="${RUNNER_TEMP}/validation-home"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          cd "${RUNNER_TEMP}"
+          python -m optagent.license request --output license-request.json
+          python "${GITHUB_WORKSPACE}/optagent/scripts/release/validation_license.py" issue \
+            --private-key "${RUNNER_TEMP}/validation-key/private.json" --request license-request.json --output validation.license
+          python -m optagent.license install validation.license
+          python -m optagent.license status
+      - id: api
+        continue-on-error: true
+        run: |
+          set +e
+          source "${RUNNER_TEMP}/validation-venv/bin/activate"
+          export HOME="${RUNNER_TEMP}/validation-home"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          export OPTAGENT_RELEASE_VALIDATION_REQUIRE_INSTALLED=1
+          export OPTAGENT_RELEASE_VALIDATION_REPRO_DIR="${GITHUB_WORKSPACE}/evidence/reproductions"
+          cd "${RUNNER_TEMP}"
+          python "${GITHUB_WORKSPACE}/optagent/scripts/release/public_api_validation.py" \
+            --allowlist "${GITHUB_WORKSPACE}/optagent/docs/site/public-api-allowlist.txt" \
+            --output-dir "${GITHUB_WORKSPACE}/evidence/api" --include-solver
+          status=$?
+          printf '%s\n' '{"scenario":"release_wheel_positive_license","status":"NOT_COVERED","reason":"release wheel was not exercised with a production-signed license"}' >> "${GITHUB_WORKSPACE}/evidence/api/results.jsonl"
+          exit ${status}
+      - id: representative
+        continue-on-error: true
+        run: |
+          source "${RUNNER_TEMP}/validation-venv/bin/activate"
+          export HOME="${RUNNER_TEMP}/validation-home"
+          python scripts/run_release_benchmarks.py --python "${RUNNER_TEMP}/validation-venv/bin/python" \
+            --benchmark-root optagent/benchmarks --plan prepared/release-plan.json \
+            --data-manifest prepared/data-manifest.json --output-dir evidence/benchmark-representative --scope representative
+      - id: release
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p evidence/release
+          python -m venv "${RUNNER_TEMP}/release-venv"
+          source "${RUNNER_TEMP}/release-venv/bin/activate"
+          python -m pip install --upgrade pip
+          python -m pip install optagent/dist/release-validation-macos/release/optagent-*.whl
+          cd "${RUNNER_TEMP}"
+          python "${GITHUB_WORKSPACE}/optagent/tests/smoke/wheel/smoke_license_gate.py" > "${GITHUB_WORKSPACE}/evidence/release/smoke.log" 2>&1
+          status=$?
+          if [[ ${status} -eq 0 ]]; then result=PASS; else result=FAIL; fi
+          printf '{"scenario":"release_wheel_rejection","status":"%s"}\n' "${result}" > "${GITHUB_WORKSPACE}/evidence/release/results.jsonl"
+          exit ${status}
+      - name: Write evidence manifest
+        if: always()
+        run: |
+          validation_wheel=(optagent/dist/release-validation-macos/validation/optagent-*.whl)
+          release_wheel=(optagent/dist/release-validation-macos/release/optagent-*.whl)
+          python scripts/write_release_manifest.py --output evidence/manifest.json --optagent-root optagent \
+            --validation-wheel "${validation_wheel[0]}" --release-wheel "${release_wheel[0]}" \
+            --data-manifest prepared/data-manifest.json --validation-key-id "${VALIDATION_KEY_ID}" --release-key-id "${RELEASE_KEY_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-validation-macos-${{ needs.resolve.outputs.sha }}
+          path: |
+            evidence
+            optagent/dist/release-validation-macos/release/optagent-*.whl
+          if-no-files-found: error
+          retention-days: 14
+      - if: always()
+        run: rm -rf "${RUNNER_TEMP}/validation-key" "${RUNNER_TEMP}/validation-home" optagent/dist/release-validation-macos/validation
+      - name: Fail when macOS validation failed
+        if: always()
+        env:
+          API: ${{ steps.api.outcome }}
+          REPRESENTATIVE: ${{ steps.representative.outcome }}
+          RELEASE: ${{ steps.release.outcome }}
+        run: '[[ "${API}" == success && "${REPRESENTATIVE}" == success && "${RELEASE}" == success ]]'
+
+  windows:
+    needs: [resolve, prepare-data]
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Dongbox/optagent
+          ref: ${{ needs.resolve.outputs.sha }}
+          token: ${{ secrets.OPTAGENT_REPO_TOKEN }}
+          persist-credentials: false
+          submodules: recursive
+          path: optagent
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-validation-data-${{ needs.resolve.outputs.sha }}
+          path: prepared
+      - shell: pwsh
+        run: tar -xzf prepared/benchmark-data.tgz -C optagent/benchmarks
+      - name: Prepare build and signing context
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip cryptography ninja
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\validation-key", "evidence" | Out-Null
+          python optagent/scripts/release/validation_license.py generate-key `
+            --private-key "$env:RUNNER_TEMP\validation-key\private.json" `
+            --metadata "$env:RUNNER_TEMP\validation-key\metadata.json" `
+            --key-id "validation-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT-windows"
+          $validation = Get-Content "$env:RUNNER_TEMP\validation-key\metadata.json" | ConvertFrom-Json
+          $releasePath = Get-ChildItem "optagent/tools/license-issuer/*.public-key.json" | Select-Object -First 1
+          $release = Get-Content $releasePath.FullName | ConvertFrom-Json
+          "VALIDATION_KEY_ID=$($validation.key_id)" | Out-File $env:GITHUB_ENV -Append
+          "VALIDATION_PUBLIC_KEY_HEX=$($validation.public_key_hex)" | Out-File $env:GITHUB_ENV -Append
+          "RELEASE_KEY_ID=$($release.key_id)" | Out-File $env:GITHUB_ENV -Append
+          "RELEASE_PUBLIC_KEY_HEX=$($release.public_key_hex)" | Out-File $env:GITHUB_ENV -Append
+      - name: Build validation and release wheels
+        shell: pwsh
+        run: |
+          ./optagent/scripts/release/build_windows_wheel.ps1 -Python (Get-Command python).Source `
+            -OutDir "optagent/dist/release-validation-windows/validation" `
+            -BuildDir "optagent/build/release-validation-windows-validation" -EnableLicense `
+            -LicenseKeyId $env:VALIDATION_KEY_ID -LicensePublicKeyHex $env:VALIDATION_PUBLIC_KEY_HEX
+          ./optagent/scripts/release/build_windows_wheel.ps1 -Python (Get-Command python).Source `
+            -OutDir "optagent/dist/release-validation-windows/release" `
+            -BuildDir "optagent/build/release-validation-windows-release" -EnableLicense `
+            -LicenseKeyId $env:RELEASE_KEY_ID -LicensePublicKeyHex $env:RELEASE_PUBLIC_KEY_HEX
+      - name: Install validation wheel and issue runner-bound license
+        shell: pwsh
+        run: |
+          python -m venv "$env:RUNNER_TEMP\validation-venv"
+          $python = "$env:RUNNER_TEMP\validation-venv\Scripts\python.exe"
+          & $python -m pip install --upgrade pip
+          $wheel = (Get-ChildItem "optagent/dist/release-validation-windows/validation/optagent-*.whl").FullName
+          & $python -m pip install $wheel ortools cryptography
+          $env:HOME = "$env:RUNNER_TEMP\validation-home"
+          $env:LOCALAPPDATA = "$env:HOME\local"
+          $env:OPTAGENT_RELEASE_VALIDATION_REQUIRE_INSTALLED = "1"
+          New-Item -ItemType Directory -Force -Path $env:HOME | Out-Null
+          Push-Location $env:RUNNER_TEMP
+          & $python -m optagent.license request --output license-request.json
+          & $python "$env:GITHUB_WORKSPACE\optagent\scripts\release\validation_license.py" issue `
+            --private-key "$env:RUNNER_TEMP\validation-key\private.json" --request license-request.json --output validation.license
+          & $python -m optagent.license install validation.license
+          & $python -m optagent.license status
+          Pop-Location
+      - id: api
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $python = "$env:RUNNER_TEMP\validation-venv\Scripts\python.exe"
+          $env:HOME = "$env:RUNNER_TEMP\validation-home"
+          $env:LOCALAPPDATA = "$env:HOME\local"
+          $env:OPTAGENT_RELEASE_VALIDATION_REQUIRE_INSTALLED = "1"
+          $env:OPTAGENT_RELEASE_VALIDATION_REPRO_DIR = "$env:GITHUB_WORKSPACE\evidence\reproductions"
+          Push-Location $env:RUNNER_TEMP
+          & $python "$env:GITHUB_WORKSPACE\optagent\scripts\release\public_api_validation.py" `
+            --allowlist "$env:GITHUB_WORKSPACE\optagent\docs\site\public-api-allowlist.txt" `
+            --output-dir "$env:GITHUB_WORKSPACE\evidence\api" --include-solver
+          $status = $LASTEXITCODE
+          '{"scenario":"release_wheel_positive_license","status":"NOT_COVERED","reason":"release wheel was not exercised with a production-signed license"}' | Add-Content "$env:GITHUB_WORKSPACE\evidence\api\results.jsonl"
+          Pop-Location
+          exit $status
+      - id: representative
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $python = "$env:RUNNER_TEMP\validation-venv\Scripts\python.exe"
+          $env:HOME = "$env:RUNNER_TEMP\validation-home"
+          $env:LOCALAPPDATA = "$env:HOME\local"
+          python scripts/run_release_benchmarks.py --python $python --benchmark-root optagent/benchmarks `
+            --plan prepared/release-plan.json --data-manifest prepared/data-manifest.json `
+            --output-dir evidence/benchmark-representative --scope representative
+      - id: release
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "evidence/release" | Out-Null
+          python -m venv "$env:RUNNER_TEMP\release-venv"
+          $python = "$env:RUNNER_TEMP\release-venv\Scripts\python.exe"
+          & $python -m pip install --upgrade pip
+          $wheel = (Get-ChildItem "optagent/dist/release-validation-windows/release/optagent-*.whl").FullName
+          & $python -m pip install $wheel
+          & $python "optagent/tests/smoke/wheel/smoke_license_gate.py" *> "evidence/release/smoke.log"
+          $status = $LASTEXITCODE
+          $result = if ($status -eq 0) { "PASS" } else { "FAIL" }
+          "{`"scenario`":`"release_wheel_rejection`",`"status`":`"$result`"}" | Set-Content "evidence/release/results.jsonl"
+          exit $status
+      - name: Write evidence manifest
+        if: always()
+        shell: pwsh
+        run: |
+          $validationWheel = (Get-ChildItem "optagent/dist/release-validation-windows/validation/optagent-*.whl").FullName
+          $releaseWheel = (Get-ChildItem "optagent/dist/release-validation-windows/release/optagent-*.whl").FullName
+          python scripts/write_release_manifest.py --output evidence/manifest.json --optagent-root optagent `
+            --validation-wheel $validationWheel --release-wheel $releaseWheel --data-manifest prepared/data-manifest.json `
+            --validation-key-id $env:VALIDATION_KEY_ID --release-key-id $env:RELEASE_KEY_ID
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-validation-windows-${{ needs.resolve.outputs.sha }}
+          path: |
+            evidence
+            optagent/dist/release-validation-windows/release/optagent-*.whl
+          if-no-files-found: error
+          retention-days: 14
+      - if: always()
+        shell: pwsh
+        run: Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$env:RUNNER_TEMP\validation-key", "$env:RUNNER_TEMP\validation-home", "optagent/dist/release-validation-windows/validation"
+      - name: Fail when Windows validation failed
+        if: always()
+        shell: pwsh
+        env:
+          API: ${{ steps.api.outcome }}
+          REPRESENTATIVE: ${{ steps.representative.outcome }}
+          RELEASE: ${{ steps.release.outcome }}
+        run: |
+          if ($env:API -ne "success" -or $env:REPRESENTATIVE -ne "success" -or $env:RELEASE -ne "success") { exit 1 }
+
+  report:
+    if: always()
+    needs: [resolve, harness-tests, prepare-data, linux, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: release-validation-*-${{ needs.resolve.outputs.sha }}
+          path: artifacts
+      - name: Record missing or failed jobs
+        env:
+          NEEDS_JSON: ${{ toJson(needs) }}
+        run: |
+          mkdir -p artifacts/job-status
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          rows = []
+          for name in ("harness-tests", "prepare-data", "linux", "macos", "windows"):
+              result = needs[name]["result"]
+              if result != "success":
+                  rows.append({"scenario": f"job:{name}", "status": "FAIL", "reason": result})
+          Path("artifacts/job-status/results.jsonl").write_text(
+              "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8"
+          )
+          PY
+      - id: aggregate
+        continue-on-error: true
+        run: python scripts/aggregate_release_validation.py --artifacts-root artifacts --output-dir final-report
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-validation-report-${{ needs.resolve.outputs.sha }}
+          path: final-report
+          if-no-files-found: error
+          retention-days: 30
+      - name: Write OptAgent commit status
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.OPTAGENT_REPO_TOKEN }}
+          SHA: ${{ needs.resolve.outputs.sha || inputs.optagent_sha }}
+        run: |
+          if [[ "${{ steps.aggregate.outcome }}" == success ]]; then state=success; description="Release validation completed"; else state=failure; description="Release validation failed"; fi
+          gh api --method POST "repos/Dongbox/optagent/statuses/${SHA}" \
+            -f state="${state}" -f context="${STATUS_CONTEXT}" -f description="${description}" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+      - name: Fail workflow when validation failed
+        if: steps.aggregate.outcome != 'success'
+        run: exit 1

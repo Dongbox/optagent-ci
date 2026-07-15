@@ -180,7 +180,7 @@ jobs:
             -DCMAKE_C_COMPILER=clang-18 \
             -DCMAKE_CXX_COMPILER=clang++-18 \
             -DCMAKE_BUILD_TYPE=Release
-          cmake --build build/clang-fast --target _optagent_native -j"$(nproc)"
+          cmake --build build/clang-fast --target _optagent_kernel -j"$(nproc)"
       - name: Generate Clang semantic snapshot
         env:
           PYTHONPATH: ${{ github.workspace }}/build/clang-fast:${{ github.workspace }}/optagent:${{ github.workspace }}/optagent/src

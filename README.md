@@ -39,6 +39,19 @@ Each platform runs CTest and fixed-seed self-consistency. Linux variants also co
 
 Performance regression remains owned by `optagent-benchmarks`.
 
+## One-Off Release Validation
+
+`release-validation.yml` is a manually dispatched Python 3.12 release evidence flow for Linux x86_64, macOS arm64, and Windows x64. It accepts one exact OptAgent commit SHA and uses the same private-repository read boundary as the regression workflow.
+
+Each platform builds two wheels from that SHA:
+
+- a validation wheel trusting a job-local ephemeral key, used for a complete machine request, short-lived `core + exact` license, public API validation, and benchmark execution;
+- a release wheel trusting the repository production public key, used for packaging, native loading, and license rejection-path validation.
+
+The release wheel is uploaded. The validation wheel and its private key are deleted and are never artifacts. Because no production signing service participates, a positive solve using the release wheel remains explicitly `NOT_COVERED`, so the strongest possible conclusion is `PASS_WITH_GAPS`.
+
+Benchmark data is prepared once, hashed, distributed to all three platform jobs, and consumed with downloads disabled. The representative matrix covers two cases from each implemented family with ten fixed seeds; Linux also runs the complete registered inventory once.
+
 ## OptAgent Contract
 
 OptAgent owns the scenarios and native replay logic in:
