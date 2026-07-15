@@ -20,18 +20,18 @@ from scripts.run_release_benchmarks import (
 
 class ReleaseValidationTest(unittest.TestCase):
     def test_benchmark_shards_partition_coordinates_without_overlap(self) -> None:
-        coordinates = [{"id": index} for index in range(19)]
+        coordinates = [{"id": index} for index in range(35)]
 
         shards = [
-            _shard_coordinates(coordinates, shard_index=index, shard_count=8)
-            for index in range(8)
+            _shard_coordinates(coordinates, shard_index=index, shard_count=16)
+            for index in range(16)
         ]
 
-        self.assertEqual([row["id"] for row in shards[0]], [0, 8, 16])
-        self.assertEqual([row["id"] for row in shards[7]], [7, 15])
+        self.assertEqual([row["id"] for row in shards[0]], [0, 16, 32])
+        self.assertEqual([row["id"] for row in shards[15]], [15, 31])
         self.assertEqual(
             sorted(row["id"] for shard in shards for row in shard),
-            list(range(19)),
+            list(range(35)),
         )
 
     def test_benchmark_shards_reject_invalid_bounds(self) -> None:

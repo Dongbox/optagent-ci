@@ -49,8 +49,12 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         )
         self.assertIn("Remove validation signing material", WORKFLOW)
         self.assertIn("Remove shard validation signing material", WORKFLOW)
-        self.assertIn("shard: [0, 1, 2, 3, 4, 5, 6, 7]", WORKFLOW)
-        self.assertIn("--shard-count 8", WORKFLOW)
+        self.assertIn(
+            'default: "[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]"',
+            WORKFLOW,
+        )
+        self.assertIn("shard: ${{ fromJSON(inputs.linux_full_shards) }}", WORKFLOW)
+        self.assertIn("--shard-count 16", WORKFLOW)
 
     def test_release_validation_uses_offline_benchmark_plan_and_hard_timeout_driver(
         self,
