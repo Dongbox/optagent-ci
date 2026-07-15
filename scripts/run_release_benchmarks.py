@@ -88,7 +88,7 @@ def run_release_benchmarks(
     output_dir: Path,
     scope: str,
 ) -> dict[str, Any]:
-    python = python.resolve()
+    python = Path(os.path.abspath(python))
     benchmark_root = benchmark_root.resolve()
     plan_path = plan_path.resolve()
     data_manifest_path = data_manifest_path.resolve()

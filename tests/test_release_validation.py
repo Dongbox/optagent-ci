@@ -7,6 +7,7 @@ import subprocess
 import sys
 import textwrap
 import unittest
+from unittest import mock
 
 from scripts.aggregate_release_validation import aggregate
 from scripts.run_release_benchmarks import (
@@ -145,6 +146,44 @@ class ReleaseValidationTest(unittest.TestCase):
             )
         finally:
             os.chdir(original_cwd)
+            import shutil
+
+            shutil.rmtree(root, ignore_errors=True)
+
+    @unittest.skipIf(os.name == "nt", "symlink behavior is covered by macOS and Linux")
+    def test_release_driver_preserves_virtualenv_python_symlink(self) -> None:
+        from scripts.run_release_benchmarks import run_release_benchmarks
+
+        root = Path(self.id().replace(".", "-"))
+        try:
+            benchmark_root = root / "benchmark-repo"
+            benchmark_root.mkdir(parents=True)
+            python = root / "venv" / "bin" / "python"
+            python.parent.mkdir(parents=True)
+            python.symlink_to(Path(sys.executable))
+            plan = root / "plan.json"
+            plan.write_text(json.dumps({"representative_cases": []}), encoding="utf-8")
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps({"files": []}), encoding="utf-8")
+            inventory = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="[]", stderr=""
+            )
+
+            with mock.patch(
+                "scripts.run_release_benchmarks.subprocess.run", return_value=inventory
+            ) as run:
+                run_release_benchmarks(
+                    python=python,
+                    benchmark_root=benchmark_root,
+                    plan_path=plan,
+                    data_manifest_path=manifest,
+                    output_dir=root / "evidence",
+                    scope="representative",
+                )
+
+            self.assertEqual(run.call_args.args[0][0], str(python.absolute()))
+            self.assertNotEqual(run.call_args.args[0][0], str(python.resolve()))
+        finally:
             import shutil
 
             shutil.rmtree(root, ignore_errors=True)
