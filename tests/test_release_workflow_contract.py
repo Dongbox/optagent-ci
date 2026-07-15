@@ -24,6 +24,15 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         self.assertIn("runs-on: windows-latest", WORKFLOW)
         self.assertIn("persist-credentials: false", WORKFLOW)
 
+    def test_release_validation_initializes_only_the_required_submodule(self) -> None:
+        self.assertNotIn("submodules: recursive", WORKFLOW)
+        self.assertEqual(
+            WORKFLOW.count(
+                "git -C optagent submodule update --init --depth 1 benchmarks"
+            ),
+            4,
+        )
+
     def test_release_validation_builds_two_wheels_and_never_uploads_validation_wheels(
         self,
     ) -> None:

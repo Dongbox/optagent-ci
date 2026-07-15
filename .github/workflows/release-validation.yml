@@ -71,8 +71,9 @@ jobs:
           ref: ${{ needs.resolve.outputs.sha }}
           token: ${{ secrets.OPTAGENT_REPO_TOKEN }}
           persist-credentials: false
-          submodules: recursive
           path: optagent
+      - name: Initialize benchmark submodule
+        run: git -C optagent submodule update --init --depth 1 benchmarks
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -108,8 +109,9 @@ jobs:
           ref: ${{ needs.resolve.outputs.sha }}
           token: ${{ secrets.OPTAGENT_REPO_TOKEN }}
           persist-credentials: false
-          submodules: recursive
           path: optagent
+      - name: Initialize benchmark submodule
+        run: git -C optagent submodule update --init --depth 1 benchmarks
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -285,8 +287,9 @@ jobs:
           ref: ${{ needs.resolve.outputs.sha }}
           token: ${{ secrets.OPTAGENT_REPO_TOKEN }}
           persist-credentials: false
-          submodules: recursive
           path: optagent
+      - name: Initialize benchmark submodule
+        run: git -C optagent submodule update --init --depth 1 benchmarks
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -425,8 +428,9 @@ jobs:
           ref: ${{ needs.resolve.outputs.sha }}
           token: ${{ secrets.OPTAGENT_REPO_TOKEN }}
           persist-credentials: false
-          submodules: recursive
           path: optagent
+      - name: Initialize benchmark submodule
+        run: git -C optagent submodule update --init --depth 1 benchmarks
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
