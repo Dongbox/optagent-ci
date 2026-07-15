@@ -200,6 +200,7 @@ jobs:
         run: |
           source "${RUNNER_TEMP}/validation-venv/bin/activate"
           export HOME="${RUNNER_TEMP}/validation-home"
+          export XDG_CONFIG_HOME="${HOME}/.config"
           python scripts/run_release_benchmarks.py \
             --python "${RUNNER_TEMP}/validation-venv/bin/python" \
             --benchmark-root optagent/benchmarks \
@@ -213,6 +214,7 @@ jobs:
         run: |
           source "${RUNNER_TEMP}/validation-venv/bin/activate"
           export HOME="${RUNNER_TEMP}/validation-home"
+          export XDG_CONFIG_HOME="${HOME}/.config"
           python scripts/run_release_benchmarks.py \
             --python "${RUNNER_TEMP}/validation-venv/bin/python" \
             --benchmark-root optagent/benchmarks \
@@ -365,6 +367,7 @@ jobs:
         run: |
           source "${RUNNER_TEMP}/validation-venv/bin/activate"
           export HOME="${RUNNER_TEMP}/validation-home"
+          export XDG_CONFIG_HOME="${HOME}/.config"
           python scripts/run_release_benchmarks.py --python "${RUNNER_TEMP}/validation-venv/bin/python" \
             --benchmark-root optagent/benchmarks --plan prepared/release-plan.json \
             --data-manifest prepared/data-manifest.json --output-dir evidence/benchmark-representative --scope representative

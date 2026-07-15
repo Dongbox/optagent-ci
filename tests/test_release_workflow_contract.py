@@ -59,6 +59,11 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         self.assertIn("os.killpg", driver)
         self.assertIn("taskkill", driver)
 
+    def test_benchmarks_reuse_the_installed_license_configuration(self) -> None:
+        self.assertEqual(
+            WORKFLOW.count('export XDG_CONFIG_HOME="${HOME}/.config"'), 7
+        )
+
     def test_regression_workflow_uses_current_kernel_target(self) -> None:
         self.assertIn("--target _optagent_kernel", REGRESSION)
         self.assertNotIn("--target _optagent_native", REGRESSION)
