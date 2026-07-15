@@ -55,6 +55,13 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         )
         self.assertIn("shard: ${{ fromJSON(inputs.linux_full_shards) }}", WORKFLOW)
         self.assertIn("--shard-count 16", WORKFLOW)
+        self.assertIn("retry_linux_full_only:", WORKFLOW)
+        self.assertEqual(
+            WORKFLOW.count('if: ${{ !inputs.retry_linux_full_only }}'), 4
+        )
+        self.assertIn(
+            "if: ${{ always() && !inputs.retry_linux_full_only }}", WORKFLOW
+        )
 
     def test_release_validation_uses_offline_benchmark_plan_and_hard_timeout_driver(
         self,

@@ -12,6 +12,11 @@ on:
         required: false
         default: "[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]"
         type: string
+      retry_linux_full_only:
+        description: Run only selected Linux full shards without updating release status
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -44,6 +49,7 @@ jobs:
           gh api "repos/Dongbox/optagent/commits/${SHA}" --silent
           echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
       - name: Mark release validation pending
+        if: ${{ !inputs.retry_linux_full_only }}
         env:
           GH_TOKEN: ${{ secrets.OPTAGENT_REPO_TOKEN }}
           SHA: ${{ steps.resolve.outputs.sha }}
@@ -103,6 +109,7 @@ jobs:
           retention-days: 14
 
   linux:
+    if: ${{ !inputs.retry_linux_full_only }}
     needs: [resolve, prepare-data]
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -415,6 +422,7 @@ jobs:
         run: '[[ "${FULL}" == success ]]'
 
   macos:
+    if: ${{ !inputs.retry_linux_full_only }}
     needs: [resolve, prepare-data]
     runs-on: macos-14
     timeout-minutes: 180
@@ -556,6 +564,7 @@ jobs:
         run: '[[ "${API}" == success && "${REPRESENTATIVE}" == success && "${RELEASE}" == success ]]'
 
   windows:
+    if: ${{ !inputs.retry_linux_full_only }}
     needs: [resolve, prepare-data]
     runs-on: windows-latest
     timeout-minutes: 180
@@ -702,7 +711,7 @@ jobs:
           if ($env:API -ne "success" -or $env:REPRESENTATIVE -ne "success" -or $env:RELEASE -ne "success") { exit 1 }
 
   report:
-    if: always()
+    if: ${{ always() && !inputs.retry_linux_full_only }}
     needs: [resolve, harness-tests, prepare-data, linux, linux-full, macos, windows]
     runs-on: ubuntu-latest
     steps:
