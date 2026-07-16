@@ -11,31 +11,16 @@ The harness enforces two different reproducibility contracts:
 
 Integer objectives compare exactly. Floating objectives use `abs_tol=1e-9` and `rel_tol=1e-9`.
 
-## Fast Gate
+## Regression Workflow
 
-Relevant OptAgent changes dispatch an exact 40-character commit SHA.
+The regression workflow is manual-only. Dispatch it with one exact 40-character
+OptAgent commit SHA. It checks out that revision, installs the current PyPA
+development dependencies, runs the complete `optagent/tests` suite, and writes
+`optagent-ci/regression` back to the tested OptAgent commit.
 
-1. GCC 13 builds the extension and C++ tests.
-2. CTest runs the native owner suite.
-3. Pytest runs regression, kernel-contract, and representative public solve tests.
-4. GCC produces a JSON semantic snapshot.
-5. Clang 18 builds the same SHA and produces another snapshot.
-6. `scripts/compare_snapshots.py` applies the semantic comparison contract.
-7. The workflow writes `optagent-ci/regression` back to the tested OptAgent commit.
-
-## Weekly Full Matrix
-
-The Sunday schedule resolves the current OptAgent `main` SHA and additionally runs:
-
-| Platform | Configuration |
-| --- | --- |
-| Linux | GCC 13 with ASan and UBSan |
-| Linux | GCC 14 with `-O3` and LTO |
-| Linux | Clang 18 with `-O3` and ThinLTO |
-| macOS arm64 | Apple Clang Release |
-| Windows x64 | MSVC Release |
-
-Each platform runs CTest and fixed-seed self-consistency. Linux variants also compare their semantic snapshots with the GCC fast baseline.
+The workflow no longer invokes CMake or native-kernel snapshot scripts because
+the current OptAgent repository is a Python package without a root
+`CMakeLists.txt`.
 
 Performance regression remains owned by `optagent-benchmarks`.
 

@@ -7,25 +7,12 @@ on:
         description: Full 40-character optagent commit SHA to test
         required: true
         type: string
-      full_matrix:
-        description: Run sanitizer, LTO, macOS, and Windows jobs
-        required: false
-        default: false
-        type: boolean
-  schedule:
-    - cron: "0 6 * * 0"
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/kernel-regression.yml"
-      - "scripts/**"
-      - "tests/**"
 
 permissions:
   contents: read
 
 concurrency:
-  group: kernel-regression-${{ inputs.optagent_sha || github.ref }}
+  group: kernel-regression-${{ inputs.optagent_sha }}
   cancel-in-progress: true
 
 env:
@@ -38,28 +25,20 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.ref.outputs.sha }}
-      full_matrix: ${{ steps.ref.outputs.full_matrix }}
     steps:
       - name: Resolve and validate exact SHA
         id: ref
         env:
           GH_TOKEN: ${{ secrets.OPTAGENT_REPO_TOKEN }}
           INPUT_SHA: ${{ inputs.optagent_sha }}
-          INPUT_FULL_MATRIX: ${{ inputs.full_matrix }}
         run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            SHA="${INPUT_SHA}"
-            FULL_MATRIX="${INPUT_FULL_MATRIX}"
-          else
-            SHA="$(gh api repos/Dongbox/optagent/commits/main --jq .sha)"
-            FULL_MATRIX="$([[ "${GITHUB_EVENT_NAME}" == "schedule" ]] && echo true || echo false)"
-          fi
+          set -euo pipefail
+          SHA="${INPUT_SHA}"
           if [[ ! "${SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "optagent_sha must be a full 40-character commit SHA" >&2
             exit 2
           fi
           echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
-          echo "full_matrix=${FULL_MATRIX}" >> "${GITHUB_OUTPUT}"
           gh api "repos/Dongbox/optagent/commits/${SHA}" --silent
 
       - name: Mark regression pending
@@ -70,7 +49,7 @@ jobs:
           gh api --method POST "repos/Dongbox/optagent/statuses/${SHA}" \
             -f state=pending \
             -f context="${STATUS_CONTEXT}" \
-            -f description="OptAgent regression matrix is running" \
+            -f description="OptAgent regression tests are running" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
   harness-tests:
@@ -84,8 +63,8 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: python -m unittest discover -s tests -v
 
-  gcc-fast:
-    name: GCC fast regression
+  python-regression:
+    name: Python regression
     needs: resolve
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -102,295 +81,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install toolchain
+          cache: pip
+          cache-dependency-path: optagent/requirements-dev.txt
+      - name: Install test dependencies
+        working-directory: optagent
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends g++-13 ninja-build cmake
-          python -m venv .venv
-          . .venv/bin/activate
-          pip install --upgrade pip
-          pip install 'pybind11>=2.12' pytest 'protobuf>=6.33,<7.0' numpy
-      - name: Configure and build native tests
-        run: |
-          . .venv/bin/activate
-          PYBIND11_DIR="$(python -m pybind11 --cmakedir)"
-          cmake -S optagent -B build/gcc-fast -G Ninja \
-            -Dpybind11_DIR="${PYBIND11_DIR}" \
-            -DCMAKE_C_COMPILER=gcc-13 \
-            -DCMAKE_CXX_COMPILER=g++-13 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DOPTAGENT_BUILD_CPP_TESTS=ON
-          cmake --build build/gcc-fast -j"$(nproc)"
-      - name: Run C++ owner tests
-        run: ctest --test-dir build/gcc-fast --output-on-failure
-      - name: Run Python regression and contracts
-        env:
-          PYTHONPATH: ${{ github.workspace }}/build/gcc-fast:${{ github.workspace }}/optagent:${{ github.workspace }}/optagent/src
-        run: |
-          . .venv/bin/activate
-          python -m pytest -q \
-            optagent/tests/python/regression \
-            optagent/tests/python/integration/kernel_contract \
-            optagent/tests/python/integration/solve/test_kernel_route.py \
-            --tb=short
-      - name: Generate GCC semantic snapshot
-        env:
-          PYTHONPATH: ${{ github.workspace }}/build/gcc-fast:${{ github.workspace }}/optagent:${{ github.workspace }}/optagent/src
-        run: |
-          . .venv/bin/activate
-          python optagent/scripts/tests/regression_snapshot.py --output artifacts/gcc/snapshot.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: regression-snapshot-gcc-${{ needs.resolve.outputs.sha }}
-          path: artifacts/gcc/snapshot.json
-          retention-days: 14
-
-  clang-fast:
-    name: Clang semantic regression
-    needs: [resolve, gcc-fast]
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - name: Checkout exact optagent revision
-        uses: actions/checkout@v4
-        with:
-          repository: Dongbox/optagent
-          ref: ${{ needs.resolve.outputs.sha }}
-          token: ${{ secrets.OPTAGENT_REPO_TOKEN }}
-          persist-credentials: false
-          path: optagent
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang-18 ninja-build cmake
-          python -m venv .venv
-          . .venv/bin/activate
-          pip install --upgrade pip
-          pip install 'pybind11>=2.12' pytest 'protobuf>=6.33,<7.0' numpy
-      - name: Configure and build Clang extension
-        run: |
-          . .venv/bin/activate
-          PYBIND11_DIR="$(python -m pybind11 --cmakedir)"
-          cmake -S optagent -B build/clang-fast -G Ninja \
-            -Dpybind11_DIR="${PYBIND11_DIR}" \
-            -DCMAKE_C_COMPILER=clang-18 \
-            -DCMAKE_CXX_COMPILER=clang++-18 \
-            -DCMAKE_BUILD_TYPE=Release
-          cmake --build build/clang-fast --target _optagent_kernel -j"$(nproc)"
-      - name: Generate Clang semantic snapshot
-        env:
-          PYTHONPATH: ${{ github.workspace }}/build/clang-fast:${{ github.workspace }}/optagent:${{ github.workspace }}/optagent/src
-        run: |
-          . .venv/bin/activate
-          python optagent/scripts/tests/regression_snapshot.py --output artifacts/clang/snapshot.json
-      - uses: actions/download-artifact@v4
-        with:
-          name: regression-snapshot-gcc-${{ needs.resolve.outputs.sha }}
-          path: artifacts/gcc
-      - name: Compare GCC and Clang semantics
-        run: |
-          python scripts/compare_snapshots.py \
-            --baseline artifacts/gcc/snapshot.json \
-            --candidate artifacts/clang/snapshot.json \
-            --report artifacts/clang/comparison.json
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: regression-snapshot-clang-${{ needs.resolve.outputs.sha }}
-          path: artifacts/clang
-          retention-days: 14
-
-  linux-full:
-    name: Linux full - ${{ matrix.name }}
-    if: needs.resolve.outputs.full_matrix == 'true'
-    needs: [resolve, gcc-fast]
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: GCC 13 ASan UBSan
-            artifact: gcc13-sanitizers
-            cc: gcc-13
-            cxx: g++-13
-            packages: g++-13
-            cxx_flags: -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
-            linker_flags: -fsanitize=address,undefined -static-libasan
-          - name: GCC 14 O3 LTO
-            artifact: gcc14-lto
-            cc: gcc-14
-            cxx: g++-14
-            packages: g++-14
-            cxx_flags: -O3 -flto=auto
-            linker_flags: -flto=auto
-          - name: Clang 18 O3 ThinLTO
-            artifact: clang18-thinlto
-            cc: clang-18
-            cxx: clang++-18
-            packages: clang-18 lld-18
-            cxx_flags: -O3 -flto=thin
-            linker_flags: -flto=thin -fuse-ld=lld
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: Dongbox/optagent
-          ref: ${{ needs.resolve.outputs.sha }}
-          token: ${{ secrets.OPTAGENT_REPO_TOKEN }}
-          persist-credentials: false
-          path: optagent
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ${{ matrix.packages }} ninja-build cmake
-          python -m venv .venv
-          . .venv/bin/activate
-          pip install --upgrade pip
-          pip install 'pybind11>=2.12' pytest 'protobuf>=6.33,<7.0' numpy
-      - name: Configure and build
-        run: |
-          . .venv/bin/activate
-          PYBIND11_DIR="$(python -m pybind11 --cmakedir)"
-          cmake -S optagent -B build/linux-full -G Ninja \
-            -Dpybind11_DIR="${PYBIND11_DIR}" \
-            -DCMAKE_C_COMPILER=${{ matrix.cc }} \
-            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DOPTAGENT_BUILD_CPP_TESTS=ON \
-            "-DCMAKE_CXX_FLAGS=${{ matrix.cxx_flags }}" \
-            "-DCMAKE_EXE_LINKER_FLAGS=${{ matrix.linker_flags }}" \
-            "-DCMAKE_SHARED_LINKER_FLAGS=${{ matrix.linker_flags }}" \
-            "-DCMAKE_MODULE_LINKER_FLAGS=${{ matrix.linker_flags }}"
-          cmake --build build/linux-full -j"$(nproc)"
-      - name: Run full native regression
-        env:
-          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1:strict_string_checks=1
-          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-          PYTHONPATH: ${{ github.workspace }}/build/linux-full:${{ github.workspace }}/optagent:${{ github.workspace }}/optagent/src
-        run: |
-          ctest --test-dir build/linux-full --output-on-failure
-          . .venv/bin/activate
-          python -m pytest -q optagent/tests/python/regression --tb=short
-          python optagent/scripts/tests/regression_snapshot.py --output artifacts/linux-full/snapshot.json
-      - uses: actions/download-artifact@v4
-        with:
-          name: regression-snapshot-gcc-${{ needs.resolve.outputs.sha }}
-          path: artifacts/gcc
-      - name: Compare full-matrix semantics
-        run: |
-          python scripts/compare_snapshots.py \
-            --baseline artifacts/gcc/snapshot.json \
-            --candidate artifacts/linux-full/snapshot.json \
-            --report artifacts/linux-full/comparison.json
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: regression-linux-${{ matrix.artifact }}-${{ needs.resolve.outputs.sha }}
-          path: artifacts/linux-full
-          retention-days: 14
-
-  macos-full:
-    name: macOS arm64 full regression
-    if: needs.resolve.outputs.full_matrix == 'true'
-    needs: resolve
-    runs-on: macos-14
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: Dongbox/optagent
-          ref: ${{ needs.resolve.outputs.sha }}
-          token: ${{ secrets.OPTAGENT_REPO_TOKEN }}
-          persist-credentials: false
-          path: optagent
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - run: |
-          test "$(uname -m)" = arm64
-          brew install ninja cmake
-          python -m venv .venv
-          . .venv/bin/activate
-          pip install --upgrade pip
-          pip install 'pybind11>=2.12' pytest 'protobuf>=6.33,<7.0' numpy
-      - name: Build and test
-        run: |
-          . .venv/bin/activate
-          PYBIND11_DIR="$(python -m pybind11 --cmakedir)"
-          cmake -S optagent -B build/macos -G Ninja \
-            -Dpybind11_DIR="${PYBIND11_DIR}" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DOPTAGENT_BUILD_CPP_TESTS=ON
-          cmake --build build/macos -j"$(sysctl -n hw.ncpu)"
-          ctest --test-dir build/macos --output-on-failure
-          PYTHONPATH="${GITHUB_WORKSPACE}/build/macos:${GITHUB_WORKSPACE}/optagent:${GITHUB_WORKSPACE}/optagent/src" \
-            python -m pytest -q optagent/tests/python/regression --tb=short
-          PYTHONPATH="${GITHUB_WORKSPACE}/build/macos:${GITHUB_WORKSPACE}/optagent:${GITHUB_WORKSPACE}/optagent/src" \
-            python optagent/scripts/tests/regression_snapshot.py --output artifacts/macos/snapshot.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: regression-macos-${{ needs.resolve.outputs.sha }}
-          path: artifacts/macos
-          retention-days: 14
-
-  windows-full:
-    name: Windows x64 full regression
-    if: needs.resolve.outputs.full_matrix == 'true'
-    needs: resolve
-    runs-on: windows-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: Dongbox/optagent
-          ref: ${{ needs.resolve.outputs.sha }}
-          token: ${{ secrets.OPTAGENT_REPO_TOKEN }}
-          persist-credentials: false
-          path: optagent
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-      - name: Install dependencies
-        shell: pwsh
-        run: |
-          python -m venv .venv
-          .\.venv\Scripts\Activate.ps1
-          pip install --upgrade pip
-          pip install 'pybind11>=2.12' pytest 'protobuf>=6.33,<7.0' numpy ninja
-      - name: Build and test
-        shell: pwsh
-        run: |
-          .\.venv\Scripts\Activate.ps1
-          $pybind11Dir = python -m pybind11 --cmakedir
-          cmake -S optagent -B build/windows -G Ninja -Dpybind11_DIR="$pybind11Dir" -DCMAKE_BUILD_TYPE=Release -DOPTAGENT_BUILD_CPP_TESTS=ON
-          cmake --build build/windows -j $env:NUMBER_OF_PROCESSORS
-          ctest --test-dir build/windows --output-on-failure
-          $env:PYTHONPATH = "$env:GITHUB_WORKSPACE\build\windows;$env:GITHUB_WORKSPACE\optagent;$env:GITHUB_WORKSPACE\optagent\src"
-          python -m pytest -q optagent/tests/python/regression --tb=short
-          python optagent/scripts/tests/regression_snapshot.py --output artifacts/windows/snapshot.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: regression-windows-${{ needs.resolve.outputs.sha }}
-          path: artifacts/windows
-          retention-days: 14
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+      - name: Run Python regression
+        working-directory: optagent
+        run: python -m pytest -q tests --tb=short
 
   report-status:
     name: Report optagent commit status
-    if: always() && (needs.resolve.outputs.sha != '' || inputs.optagent_sha != '')
-    needs: [resolve, harness-tests, gcc-fast, clang-fast, linux-full, macos-full, windows-full]
+    if: always() && needs.resolve.result == 'success'
+    needs: [resolve, harness-tests, python-regression]
     runs-on: ubuntu-latest
     steps:
       - name: Determine aggregate result
@@ -403,9 +108,16 @@ jobs:
           import os
 
           needs = json.loads(os.environ["NEEDS_JSON"])
-          failed = [name for name, value in needs.items() if value["result"] not in {"success", "skipped"}]
+          failed = [
+              name for name, value in needs.items()
+              if name != "resolve" and value["result"] not in {"success", "skipped"}
+          ]
           state = "failure" if failed else "success"
-          description = "Failed jobs: " + ", ".join(failed) if failed else "OptAgent regression matrix passed"
+          description = (
+              "Failed jobs: " + ", ".join(failed)
+              if failed
+              else "OptAgent regression tests passed"
+          )
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"state={state}\n")
               output.write(f"description={description[:140]}\n")
@@ -413,7 +125,7 @@ jobs:
       - name: Write commit status
         env:
           GH_TOKEN: ${{ secrets.OPTAGENT_REPO_TOKEN }}
-          SHA: ${{ needs.resolve.outputs.sha || inputs.optagent_sha }}
+          SHA: ${{ needs.resolve.outputs.sha }}
           STATE: ${{ steps.result.outputs.state }}
           DESCRIPTION: ${{ steps.result.outputs.description }}
         run: |

@@ -37,5 +37,4 @@ jobs:
           gh workflow run kernel-regression.yml \
             --repo Dongbox/optagent-ci \
             --ref main \
-            -f optagent_sha="${SHA}" \
-            -f full_matrix=false
+            -f optagent_sha="${SHA}"
