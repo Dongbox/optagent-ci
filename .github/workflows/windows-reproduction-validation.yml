@@ -1,0 +1,237 @@
+name: Windows Reproduction Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      optagent_sha:
+        description: Full 40-character OptAgent commit SHA to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-reproduction-${{ inputs.optagent_sha }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.OPTAGENT_REPO_TOKEN }}
+          SHA: ${{ inputs.optagent_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "optagent_sha must be a full 40-character commit SHA" >&2
+            exit 2
+          fi
+          gh api "repos/Dongbox/optagent/commits/${SHA}" --silent
+          echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
+
+  prepare-data:
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Dongbox/optagent
+          ref: ${{ needs.resolve.outputs.sha }}
+          token: ${{ secrets.OPTAGENT_REPO_TOKEN }}
+          persist-credentials: false
+          path: optagent
+      - name: Initialize benchmark submodule
+        run: git -C optagent submodule update --init --depth 1 benchmarks
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Prepare fixed single-seed benchmark plan
+        env:
+          PYTHONPATH: ${{ github.workspace }}/optagent/src
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install 'protobuf>=6.33,<7.0'
+          mkdir -p prepared
+          python optagent/benchmarks/benchmark.py release-plan \
+            --output prepared/release-plan.json
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          path = Path("prepared/release-plan.json")
+          plan = json.loads(path.read_text(encoding="utf-8"))
+          for row in plan["representative_cases"]:
+              if any(strategy in {"alns", "lns"} for strategy in row["strategies"]):
+                  raise SystemExit(f"unreleased strategy in plan: {row}")
+              exact = row["family"] == "exact_linear_mip"
+              row["seeds"] = [0] if exact else [11]
+              row["repeat_seeds"] = []
+              row["repeat_count"] = 1
+          path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+          case_root = Path("optagent/benchmarks/benchmarks/cases")
+          files = [
+              {
+                  "path": str(raw.relative_to(case_root)),
+                  "size": raw.stat().st_size,
+                  "sha256": hashlib.sha256(raw.read_bytes()).hexdigest(),
+              }
+              for raw in sorted(case_root.glob("**/raw/*"))
+              if raw.is_file()
+          ]
+          if not files:
+              raise SystemExit("benchmark checkout contains no raw data")
+          manifest = {"schema_version": 1, "files": files}
+          Path("prepared/data-manifest.json").write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          PY
+          tar -czf prepared/benchmark-data.tgz -C optagent/benchmarks benchmarks/cases
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-reproduction-data-${{ needs.resolve.outputs.sha }}
+          path: prepared
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    needs: [resolve, prepare-data]
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Dongbox/optagent
+          ref: ${{ needs.resolve.outputs.sha }}
+          token: ${{ secrets.OPTAGENT_REPO_TOKEN }}
+          persist-credentials: false
+          path: optagent
+      - name: Initialize benchmark submodule
+        run: git -C optagent submodule update --init --depth 1 benchmarks
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-reproduction-data-${{ needs.resolve.outputs.sha }}
+          path: prepared
+      - shell: pwsh
+        run: tar -xzf prepared/benchmark-data.tgz -C optagent/benchmarks
+      - name: Build validation wheel
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip cryptography ninja
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\validation-key", "evidence" | Out-Null
+          python optagent/scripts/release/validation_license.py generate-key `
+            --private-key "$env:RUNNER_TEMP\validation-key\private.json" `
+            --metadata "$env:RUNNER_TEMP\validation-key\metadata.json" `
+            --key-id "windows-reproduction-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $validation = Get-Content "$env:RUNNER_TEMP\validation-key\metadata.json" | ConvertFrom-Json
+          ./optagent/scripts/release/build_windows_wheel.ps1 -Python (Get-Command python).Source `
+            -OutDir "optagent/dist/windows-reproduction" `
+            -BuildDir "optagent/build/windows-reproduction" -EnableLicense `
+            -LicenseKeyId $validation.key_id -LicensePublicKeyHex $validation.public_key_hex
+      - name: Install wheel and runner-bound license
+        shell: pwsh
+        run: |
+          python -m venv "$env:RUNNER_TEMP\validation-venv"
+          $python = "$env:RUNNER_TEMP\validation-venv\Scripts\python.exe"
+          & $python -m pip install --upgrade pip
+          $wheel = (Get-ChildItem "optagent/dist/windows-reproduction/optagent-*.whl").FullName
+          & $python -m pip install $wheel ortools cryptography
+          $env:HOME = "$env:RUNNER_TEMP\validation-home"
+          $env:LOCALAPPDATA = "$env:HOME\local"
+          New-Item -ItemType Directory -Force -Path $env:HOME | Out-Null
+          Push-Location $env:RUNNER_TEMP
+          & $python -m optagent.license request --output license-request.json
+          & $python "$env:GITHUB_WORKSPACE\optagent\scripts\release\validation_license.py" issue `
+            --private-key "$env:RUNNER_TEMP\validation-key\private.json" `
+            --request license-request.json --output validation.license
+          & $python -m optagent.license install validation.license
+          & $python -m optagent.license status
+          Pop-Location
+      - id: reproduction
+        name: Verify installed-wheel reproduction on Windows Python 3.12
+        shell: pwsh
+        run: |
+          $python = "$env:RUNNER_TEMP\validation-venv\Scripts\python.exe"
+          $env:HOME = "$env:RUNNER_TEMP\validation-home"
+          $env:LOCALAPPDATA = "$env:HOME\local"
+          $env:PATH = "$env:RUNNER_TEMP\validation-venv\Scripts;$env:PATH"
+          $env:TEMP = "$env:GITHUB_WORKSPACE\evidence\reproduction-temp"
+          $env:TMP = $env:TEMP
+          New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
+          Push-Location $env:RUNNER_TEMP
+          $output = & $python "$env:GITHUB_WORKSPACE\optagent\tests\smoke\wheel\smoke_reproduction.py" 2>&1
+          $status = $LASTEXITCODE
+          $output | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\evidence\reproduction.log"
+          Pop-Location
+          exit $status
+      - id: benchmark
+        name: Run representative single-seed benchmarks
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $python = "$env:RUNNER_TEMP\validation-venv\Scripts\python.exe"
+          $env:HOME = "$env:RUNNER_TEMP\validation-home"
+          $env:LOCALAPPDATA = "$env:HOME\local"
+          python scripts/run_release_benchmarks.py --python $python --benchmark-root optagent/benchmarks `
+            --plan prepared/release-plan.json --data-manifest prepared/data-manifest.json `
+            --output-dir evidence/benchmark --scope representative
+      - name: Write support summary
+        if: always()
+        shell: pwsh
+        run: |
+          "## Windows Python 3.12 reproduction and benchmark" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- Reproduction gate: ${{ steps.reproduction.outcome }}" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- Benchmark step: ${{ steps.benchmark.outcome }}" | Add-Content $env:GITHUB_STEP_SUMMARY
+          $results = "evidence/benchmark/benchmark-results.jsonl"
+          if (Test-Path $results) {
+            "" | Add-Content $env:GITHUB_STEP_SUMMARY
+            "| Family | Case | Strategy | Model style | Status | Reason | Duration (s) |" | Add-Content $env:GITHUB_STEP_SUMMARY
+            "| --- | --- | --- | --- | --- | --- | ---: |" | Add-Content $env:GITHUB_STEP_SUMMARY
+            Get-Content $results | ForEach-Object {
+              $row = $_ | ConvertFrom-Json
+              $reason = if ($row.reason) { $row.reason } else { "" }
+              $duration = if ($null -ne $row.duration_s) { "{0:N2}" -f $row.duration_s } else { "" }
+              "| $($row.family) | $($row.benchmark_id) | $($row.strategy) | $($row.model_style) | $($row.status) | $reason | $duration |" | Add-Content $env:GITHUB_STEP_SUMMARY
+            }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-reproduction-evidence-${{ needs.resolve.outputs.sha }}
+          path: evidence
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Remove validation signing material
+        if: always()
+        shell: pwsh
+        run: Remove-Item -Recurse -Force "$env:RUNNER_TEMP\validation-key" -ErrorAction SilentlyContinue
+      - name: Enforce validation result
+        if: always()
+        shell: pwsh
+        run: |
+          if ("${{ steps.reproduction.outcome }}" -ne "success") {
+            throw "Windows reproduction validation failed"
+          }
+          if ("${{ steps.benchmark.outcome }}" -ne "success") {
+            throw "One or more representative benchmarks failed"
+          }

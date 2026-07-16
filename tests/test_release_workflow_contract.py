@@ -11,6 +11,9 @@ WORKFLOW = (ROOT / ".github" / "workflows" / "release-validation.yml").read_text
 REGRESSION = (ROOT / ".github" / "workflows" / "kernel-regression.yml").read_text(
     encoding="utf-8"
 )
+WINDOWS_REPRODUCTION = (
+    ROOT / ".github" / "workflows" / "windows-reproduction-validation.yml"
+).read_text(encoding="utf-8")
 
 
 class ReleaseWorkflowContractTest(unittest.TestCase):
@@ -94,6 +97,25 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
     def test_regression_workflow_uses_current_kernel_target(self) -> None:
         self.assertIn("--target _optagent_kernel", REGRESSION)
         self.assertNotIn("--target _optagent_native", REGRESSION)
+
+    def test_windows_reproduction_workflow_is_python312_and_exact_sha(self) -> None:
+        self.assertIn("Full 40-character OptAgent commit SHA", WINDOWS_REPRODUCTION)
+        self.assertIn('PYTHON_VERSION: "3.12"', WINDOWS_REPRODUCTION)
+        self.assertIn("runs-on: windows-latest", WINDOWS_REPRODUCTION)
+        self.assertIn("persist-credentials: false", WINDOWS_REPRODUCTION)
+
+    def test_windows_reproduction_gates_single_seed_benchmarks(self) -> None:
+        reproduction = WINDOWS_REPRODUCTION.index("smoke_reproduction.py")
+        benchmark = WINDOWS_REPRODUCTION.index("Run representative single-seed benchmarks")
+
+        self.assertLess(reproduction, benchmark)
+        self.assertIn('row["seeds"] = [0] if exact else [11]', WINDOWS_REPRODUCTION)
+        self.assertIn('row["repeat_seeds"] = []', WINDOWS_REPRODUCTION)
+        self.assertIn('row["repeat_count"] = 1', WINDOWS_REPRODUCTION)
+        self.assertIn('strategy in {"alns", "lns"}', WINDOWS_REPRODUCTION)
+        self.assertIn('case_root.glob("**/raw/*")', WINDOWS_REPRODUCTION)
+        self.assertNotIn("--prepare-data", WINDOWS_REPRODUCTION)
+        self.assertIn("windows-reproduction-evidence-", WINDOWS_REPRODUCTION)
 
 
 if __name__ == "__main__":
