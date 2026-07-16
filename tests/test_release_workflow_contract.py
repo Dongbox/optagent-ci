@@ -113,6 +113,7 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         self.assertIn('row["repeat_seeds"] = []', WINDOWS_REPRODUCTION)
         self.assertIn('row["repeat_count"] = 1', WINDOWS_REPRODUCTION)
         self.assertIn('strategy in {"alns", "lns"}', WINDOWS_REPRODUCTION)
+        self.assertIn("build_model(allow_download=True)", WINDOWS_REPRODUCTION)
         self.assertIn('case_root.glob("**/raw/*")', WINDOWS_REPRODUCTION)
         self.assertNotIn("--prepare-data", WINDOWS_REPRODUCTION)
         self.assertIn("windows-reproduction-evidence-", WINDOWS_REPRODUCTION)
