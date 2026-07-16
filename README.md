@@ -39,6 +39,12 @@ Each platform runs CTest and fixed-seed self-consistency. Linux variants also co
 
 Performance regression remains owned by `optagent-benchmarks`.
 
+## Native Memory Sanitizers
+
+`memory-sanitizers.yml` is a dedicated Linux native-memory gate. It accepts an exact OptAgent commit SHA, builds the repository-owned `kernel-asan-ninja` preset with GCC 13, and runs the C++ owner tests with AddressSanitizer, UndefinedBehaviorSanitizer, and LeakSanitizer enabled. It does not run Python/pybind tests, so Python dynamic loading cannot mask native leak results.
+
+The workflow runs every Monday and can also be dispatched manually. It publishes the `optagent-ci/memory-sanitizers` status to the tested OptAgent commit.
+
 ## One-Off Release Validation
 
 `release-validation.yml` is a manually dispatched Python 3.12 release evidence flow for Linux x86_64, macOS arm64, and Windows x64. It accepts one exact OptAgent commit SHA and uses the same private-repository read boundary as the regression workflow.
