@@ -14,13 +14,13 @@ Integer objectives compare exactly. Floating objectives use `abs_tol=1e-9` and `
 ## Regression Workflow
 
 The regression workflow is manual-only. Dispatch it with one exact 40-character
-OptAgent commit SHA. It checks out that revision, installs the current PyPA
-development dependencies, runs the complete `optagent/tests` suite, and writes
+OptAgent commit SHA. It checks out that revision, builds the v1.2 native kernel
+with GCC 13, runs the C++ owner tests and Python regression/contract tests, and
+writes
 `optagent-ci/regression` back to the tested OptAgent commit.
 
-The workflow no longer invokes CMake or native-kernel snapshot scripts because
-the current OptAgent repository is a Python package without a root
-`CMakeLists.txt`.
+The workflow installs Python test dependencies directly and does not install
+`highspy`; v1.2 embeds the HiGHS native library through CMake.
 
 Performance regression remains owned by `optagent-benchmarks`.
 

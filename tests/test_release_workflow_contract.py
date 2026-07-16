@@ -94,10 +94,10 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
             WORKFLOW.count('export XDG_CONFIG_HOME="${HOME}/.config"'), 8
         )
 
-    def test_regression_workflow_tracks_current_python_layout(self) -> None:
-        self.assertIn("python -m pip install -r requirements-dev.txt", REGRESSION)
-        self.assertIn("python -m pytest -q tests --tb=short", REGRESSION)
-        self.assertNotIn("cmake -S optagent", REGRESSION)
+    def test_regression_workflow_tracks_v12_native_layout(self) -> None:
+        self.assertIn("cmake -S optagent -B build/gcc-fast", REGRESSION)
+        self.assertIn("cmake --build build/gcc-fast", REGRESSION)
+        self.assertNotIn("highspy", REGRESSION)
 
     def test_windows_reproduction_workflow_is_python312_and_exact_sha(self) -> None:
         self.assertIn("Full 40-character OptAgent commit SHA", WINDOWS_REPRODUCTION)

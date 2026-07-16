@@ -63,8 +63,8 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: python -m unittest discover -s tests -v
 
-  python-regression:
-    name: Python regression
+  gcc-fast:
+    name: GCC fast regression
     needs: resolve
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -81,21 +81,53 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: optagent/requirements-dev.txt
-      - name: Install test dependencies
-        working-directory: optagent
+      - name: Install native test dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++-13 ninja-build cmake
+          python -m venv .venv
+          . .venv/bin/activate
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-dev.txt
-      - name: Run Python regression
-        working-directory: optagent
-        run: python -m pytest -q tests --tb=short
+          python -m pip install 'pybind11>=2.13,<3.0' 'pytest>=8.3,<9.0' 'protobuf>=6.33,<7.0' 'numpy>=1.26,<3.0'
+      - name: Configure and build native tests
+        run: |
+          . .venv/bin/activate
+          PYBIND11_DIR="$(python -m pybind11 --cmakedir)"
+          cmake -S optagent -B build/gcc-fast -G Ninja \
+            -Dpybind11_DIR="${PYBIND11_DIR}" \
+            -DCMAKE_C_COMPILER=gcc-13 \
+            -DCMAKE_CXX_COMPILER=g++-13 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DOPTAGENT_BUILD_CPP_TESTS=ON
+          cmake --build build/gcc-fast -j"$(nproc)"
+      - name: Run C++ owner tests
+        run: ctest --test-dir build/gcc-fast --output-on-failure
+      - name: Run Python regression and contracts
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build/gcc-fast:${{ github.workspace }}/optagent:${{ github.workspace }}/optagent/src
+        run: |
+          . .venv/bin/activate
+          python -m pytest -q \
+            optagent/tests/python/regression \
+            optagent/tests/python/integration/kernel_contract \
+            optagent/tests/python/integration/solve/test_kernel_route.py \
+            --tb=short
+      - name: Generate semantic snapshot
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build/gcc-fast:${{ github.workspace }}/optagent:${{ github.workspace }}/optagent/src
+        run: |
+          . .venv/bin/activate
+          python optagent/scripts/tests/regression_snapshot.py --output artifacts/gcc/snapshot.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: regression-snapshot-gcc-${{ needs.resolve.outputs.sha }}
+          path: artifacts/gcc/snapshot.json
+          retention-days: 14
 
   report-status:
     name: Report optagent commit status
     if: always() && needs.resolve.result == 'success'
-    needs: [resolve, harness-tests, python-regression]
+    needs: [resolve, harness-tests, gcc-fast]
     runs-on: ubuntu-latest
     steps:
       - name: Determine aggregate result

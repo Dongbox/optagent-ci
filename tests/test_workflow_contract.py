@@ -10,11 +10,11 @@ WORKFLOW = (ROOT / ".github" / "workflows" / "kernel-regression.yml").read_text(
 
 class WorkflowContractTest(unittest.TestCase):
     def test_uses_current_optagent_python_test_layout(self) -> None:
-        self.assertIn("python -m pip install -r requirements-dev.txt", WORKFLOW)
-        self.assertIn("python -m pytest -q tests --tb=short", WORKFLOW)
-        self.assertIn("working-directory: optagent", WORKFLOW)
-        self.assertNotIn("CMakeLists.txt", WORKFLOW)
-        self.assertNotIn("regression_snapshot.py", WORKFLOW)
+        self.assertIn("optagent/tests/python/regression", WORKFLOW)
+        self.assertIn("optagent/tests/python/integration/kernel_contract", WORKFLOW)
+        self.assertIn("optagent/scripts/tests/regression_snapshot.py", WORKFLOW)
+        self.assertIn("-DOPTAGENT_BUILD_CPP_TESTS=ON", WORKFLOW)
+        self.assertNotIn("highspy", WORKFLOW)
 
     def test_is_manual_only(self) -> None:
         self.assertIn("workflow_dispatch:", WORKFLOW)
