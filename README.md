@@ -14,9 +14,11 @@ Integer objectives compare exactly. Floating objectives use `abs_tol=1e-9` and `
 ## Regression Workflow
 
 The regression workflow is manual-only. Dispatch it with one exact 40-character
-OptAgent commit SHA. It checks out that revision, builds the v1.2 native kernel
-with GCC 13, runs the C++ owner tests and Python regression/contract tests, and
-writes
+OptAgent commit SHA. It checks out that revision and validates Linux amd64 and
+Windows amd64 independently. Linux builds the v1.2 native kernel with GCC 13;
+Windows builds and installs the `win_amd64` wheel with MSVC. Both platforms
+generate semantic snapshots, then the workflow compares feasibility, replay
+validity, status category, and objective value before writing
 `optagent-ci/regression` back to the tested OptAgent commit.
 
 The workflow installs Python test dependencies directly and does not install

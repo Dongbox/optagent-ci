@@ -98,6 +98,8 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         self.assertIn("cmake -S optagent -B build/gcc-fast", REGRESSION)
         self.assertIn("cmake --build build/gcc-fast", REGRESSION)
         self.assertNotIn("highspy", REGRESSION)
+        self.assertIn("windows-latest", REGRESSION)
+        self.assertIn("regression-snapshot-windows-amd64-", REGRESSION)
 
     def test_windows_reproduction_workflow_is_python312_and_exact_sha(self) -> None:
         self.assertIn("Full 40-character OptAgent commit SHA", WINDOWS_REPRODUCTION)

@@ -1,4 +1,4 @@
-name: Kernel Regression Matrix
+name: Kernel Cross-Platform Regression
 
 on:
   workflow_dispatch:
@@ -120,14 +120,95 @@ jobs:
           python optagent/scripts/tests/regression_snapshot.py --output artifacts/gcc/snapshot.json
       - uses: actions/upload-artifact@v4
         with:
-          name: regression-snapshot-gcc-${{ needs.resolve.outputs.sha }}
+          name: regression-snapshot-linux-amd64-${{ needs.resolve.outputs.sha }}
           path: artifacts/gcc/snapshot.json
+          retention-days: 14
+
+  windows-x64:
+    name: Windows x64 regression
+    needs: resolve
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout exact optagent revision
+        uses: actions/checkout@v4
+        with:
+          repository: Dongbox/optagent
+          ref: ${{ needs.resolve.outputs.sha }}
+          token: ${{ secrets.OPTAGENT_REPO_TOKEN }}
+          persist-credentials: false
+          path: optagent
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Verify amd64 runner and build Windows wheel
+        shell: pwsh
+        run: |
+          if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") {
+            throw "Expected an amd64 Windows runner, got $env:PROCESSOR_ARCHITECTURE"
+          }
+          python -m pip install --upgrade pip cryptography ninja
+          New-Item -ItemType Directory -Force -Path artifacts/windows | Out-Null
+          ./optagent/scripts/release/build_windows_wheel.ps1 `
+            -Python (Get-Command python).Source `
+            -OutDir "${env:GITHUB_WORKSPACE}/artifacts/windows" `
+            -BuildDir "${env:GITHUB_WORKSPACE}/build/windows-regression"
+      - name: Install Windows wheel and test dependencies
+        shell: pwsh
+        run: |
+          python -m venv "$env:RUNNER_TEMP\windows-regression-venv"
+          $python = "$env:RUNNER_TEMP\windows-regression-venv\Scripts\python.exe"
+          $wheel = (Get-ChildItem "artifacts/windows/optagent-*.whl").FullName
+          & $python -m pip install --upgrade pip
+          & $python -m pip install $wheel pytest 'protobuf>=6.33,<7.0' 'numpy>=1.26,<3.0' 'cryptography>=43,<46'
+      - name: Generate Windows semantic snapshot
+        shell: pwsh
+        run: |
+          $python = "$env:RUNNER_TEMP\windows-regression-venv\Scripts\python.exe"
+          Push-Location $env:RUNNER_TEMP
+          & $python "$env:GITHUB_WORKSPACE\optagent\scripts\tests\regression_snapshot.py" `
+            --output "$env:GITHUB_WORKSPACE\artifacts\windows\snapshot.json"
+          Pop-Location
+      - uses: actions/upload-artifact@v4
+        with:
+          name: regression-snapshot-windows-amd64-${{ needs.resolve.outputs.sha }}
+          path: artifacts/windows/snapshot.json
+          retention-days: 14
+
+  compare-platforms:
+    name: Compare Linux and Windows semantics
+    needs: [resolve, gcc-fast, windows-x64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: regression-snapshot-linux-amd64-${{ needs.resolve.outputs.sha }}
+          path: artifacts/linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: regression-snapshot-windows-amd64-${{ needs.resolve.outputs.sha }}
+          path: artifacts/windows
+      - name: Compare Linux and Windows semantic snapshots
+        run: |
+          python scripts/compare_snapshots.py \
+            --baseline artifacts/linux/snapshot.json \
+            --candidate artifacts/windows/snapshot.json \
+            --report artifacts/platform-comparison.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: regression-platform-comparison-${{ needs.resolve.outputs.sha }}
+          path: artifacts/platform-comparison.json
           retention-days: 14
 
   report-status:
     name: Report optagent commit status
     if: always() && needs.resolve.result == 'success'
-    needs: [resolve, harness-tests, gcc-fast]
+    needs: [resolve, harness-tests, gcc-fast, windows-x64, compare-platforms]
     runs-on: ubuntu-latest
     steps:
       - name: Determine aggregate result
