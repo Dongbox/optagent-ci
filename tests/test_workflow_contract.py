@@ -14,6 +14,7 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("optagent/tests/python/integration/kernel_contract", WORKFLOW)
         self.assertIn("optagent/scripts/tests/regression_snapshot.py", WORKFLOW)
         self.assertIn("-DOPTAGENT_BUILD_CPP_TESTS=ON", WORKFLOW)
+        self.assertIn("cryptography>=43,<46", WORKFLOW)
         self.assertNotIn("highspy", WORKFLOW)
 
     def test_is_manual_only(self) -> None:
