@@ -7,7 +7,7 @@ from scripts.compare_snapshots import compare_snapshots
 
 def _snapshot(*, objective: float, variables: dict[str, object], iterations: int) -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "comparison_contract": {
             "integer_objective": "exact",
             "floating_objective_abs_tol": 1e-9,
@@ -18,10 +18,10 @@ def _snapshot(*, objective: float, variables: dict[str, object], iterations: int
                 "semantic": {
                     "status_category": "feasible",
                     "feasible": True,
-                    "replayed_feasible": True,
-                    "dag_recheck_passed": True,
+                    "rechecked_feasible": True,
+                    "expression_recheck_passed": True,
                     "objective": {"kind": "floating", "value": objective},
-                    "replayed_objective": objective,
+                    "rechecked_objective": objective,
                 },
                 "diagnostic": {
                     "variable_values": variables,
@@ -36,7 +36,7 @@ def _integer_snapshot(value: int) -> dict:
     snapshot = _snapshot(objective=float(value), variables={"1": value}, iterations=1)
     semantic = snapshot["cases"]["floating_case"]["semantic"]
     semantic["objective"] = {"kind": "integer", "value": value}
-    semantic["replayed_objective"] = value
+    semantic["rechecked_objective"] = value
     return snapshot
 
 
@@ -52,14 +52,17 @@ class CompareSnapshotsTest(unittest.TestCase):
 
         self.assertIn("floating_case: integer objective differs: 3 != 4", errors)
 
-    def test_invalid_native_replay_fails(self) -> None:
+    def test_invalid_expression_recheck_fails(self) -> None:
         baseline = _integer_snapshot(3)
         candidate = _integer_snapshot(3)
-        candidate["cases"]["floating_case"]["semantic"]["dag_recheck_passed"] = False
+        candidate["cases"]["floating_case"]["semantic"]["expression_recheck_passed"] = False
 
         errors = compare_snapshots(baseline, candidate)
 
-        self.assertIn("candidate floating_case: native replay did not pass DAG validation", errors)
+        self.assertIn(
+            "candidate floating_case: expression recheck did not match solver objectives",
+            errors,
+        )
 
 
 if __name__ == "__main__":

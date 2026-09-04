@@ -34,27 +34,27 @@ def _compare_objective(
     return errors
 
 
-def _validate_replay(case_name: str, semantic: dict[str, Any], contract: dict[str, Any]) -> list[str]:
+def _validate_recheck(case_name: str, semantic: dict[str, Any], contract: dict[str, Any]) -> list[str]:
     if not semantic.get("feasible"):
         return [f"{case_name}: solution is not feasible"]
-    if not semantic.get("replayed_feasible"):
-        return [f"{case_name}: replayed solution is not feasible"]
-    if not semantic.get("dag_recheck_passed"):
-        return [f"{case_name}: native replay did not pass DAG validation"]
+    if not semantic.get("rechecked_feasible"):
+        return [f"{case_name}: rechecked solution is not feasible"]
+    if not semantic.get("expression_recheck_passed"):
+        return [f"{case_name}: expression recheck did not match solver objectives"]
 
     objective = semantic["objective"]
-    replayed = semantic.get("replayed_objective")
-    replay_objective = {"kind": objective["kind"], "value": replayed}
+    rechecked = semantic.get("rechecked_objective")
+    rechecked_objective = {"kind": objective["kind"], "value": rechecked}
     return [
-        error.replace(f"{case_name}: ", f"{case_name}: replayed ", 1)
-        for error in _compare_objective(case_name, objective, replay_objective, contract)
+        error.replace(f"{case_name}: ", f"{case_name}: rechecked ", 1)
+        for error in _compare_objective(case_name, objective, rechecked_objective, contract)
     ]
 
 
 def compare_snapshots(baseline: dict[str, Any], candidate: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    if baseline.get("schema_version") != 1 or candidate.get("schema_version") != 1:
-        return ["both snapshots must use schema_version 1"]
+    if baseline.get("schema_version") != 2 or candidate.get("schema_version") != 2:
+        return ["both snapshots must use schema_version 2"]
     if baseline.get("comparison_contract") != candidate.get("comparison_contract"):
         return ["snapshot comparison contracts differ"]
 
@@ -70,8 +70,8 @@ def compare_snapshots(baseline: dict[str, Any], candidate: dict[str, Any]) -> li
     for case_name in sorted(baseline_cases):
         baseline_semantic = baseline_cases[case_name]["semantic"]
         candidate_semantic = candidate_cases[case_name]["semantic"]
-        errors.extend(_validate_replay(f"baseline {case_name}", baseline_semantic, contract))
-        errors.extend(_validate_replay(f"candidate {case_name}", candidate_semantic, contract))
+        errors.extend(_validate_recheck(f"baseline {case_name}", baseline_semantic, contract))
+        errors.extend(_validate_recheck(f"candidate {case_name}", candidate_semantic, contract))
         if baseline_semantic.get("status_category") != candidate_semantic.get("status_category"):
             errors.append(
                 f"{case_name}: status category differs: "

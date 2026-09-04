@@ -7,7 +7,7 @@ External regression harness for the OptAgent native kernel.
 The harness enforces two different reproducibility contracts:
 
 - The same binary, problem, seed, and iteration budget must produce an identical complete snapshot.
-- Different compilers must produce semantically equivalent results. Feasibility, replay validation, status category, and objective value are gating; assignments, iteration counts, and search traces are diagnostic.
+- Different compilers must produce semantically equivalent results. Feasibility, expression recheck, status category, and objective value are gating; assignments, iteration counts, and search traces are diagnostic.
 
 Integer objectives compare exactly. Floating objectives use `abs_tol=1e-9` and `rel_tol=1e-9`.
 
@@ -15,14 +15,15 @@ Integer objectives compare exactly. Floating objectives use `abs_tol=1e-9` and `
 
 The regression workflow is manual-only. Dispatch it with one exact 40-character
 OptAgent commit SHA. It checks out that revision and validates Linux amd64 and
-Windows amd64 independently. Linux builds the v1.2 native kernel with GCC 13;
+Windows amd64 independently. Linux builds the native kernel with GCC 13;
 Windows builds and installs the `win_amd64` wheel with MSVC. Both platforms
-generate semantic snapshots, then the workflow compares feasibility, replay
-validity, status category, and objective value before writing
+generate semantic snapshots with `scripts/generate_regression_snapshot.py`, then
+the workflow compares feasibility, expression recheck, status category, and
+objective value before writing
 `optagent-ci/regression` back to the tested OptAgent commit.
 
 The workflow installs Python test dependencies directly and does not install
-`highspy`; v1.2 embeds the HiGHS native library through CMake.
+`highspy`; OptAgent embeds the HiGHS native library through CMake.
 
 Performance regression remains owned by `optagent-benchmarks`.
 
@@ -45,14 +46,15 @@ The release wheel is uploaded. The validation wheel and its private key are dele
 
 Benchmark data is prepared once, hashed, distributed to all three platform jobs, and consumed with downloads disabled. The representative matrix covers two cases from each implemented family with ten fixed seeds; Linux also runs the complete registered inventory once.
 
-## OptAgent Contract
+## Cross-Repository Contract
 
-OptAgent owns the scenarios and native replay logic in:
+The CI harness generates the semantic cases here, while OptAgent owns the
+integration and native test interfaces consumed by the workflow:
 
 ```text
-scripts/tests/regression_snapshot.py
-tests/python/regression/
+scripts/generate_regression_snapshot.py
 tests/python/integration/kernel_contract/
+tests/python/integration/solve/
 tests/cpp/
 ```
 
@@ -95,3 +97,20 @@ python3 scripts/compare_snapshots.py \
   --baseline /path/to/gcc.json \
   --candidate /path/to/clang.json
 ```
+
+## Local Self-Hosted Runners
+
+The manual regression, release-validation, and sanitizer workflows can target
+repository-scoped runners labeled `linux-amd64` and `macos-arm64`. Install both
+on an Apple Silicon Mac with Docker available:
+
+```bash
+runner/install-local-runners.sh all
+gh api repos/Dongbox/optagent-ci/actions/runners \
+  --jq '.runners[] | [.name, .status, ([.labels[].name] | join(","))] | @tsv'
+```
+
+The Linux runner is an amd64 Ubuntu container. On an arm64 Mac this is a
+virtualized correctness runner, not a representative x86_64 performance host.
+The macOS runner is installed as a per-user launchd service. Select
+`github-hosted` in a manual workflow dispatch to bypass local runners.

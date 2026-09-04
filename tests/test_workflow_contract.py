@@ -10,9 +10,9 @@ WORKFLOW = (ROOT / ".github" / "workflows" / "kernel-regression.yml").read_text(
 
 class WorkflowContractTest(unittest.TestCase):
     def test_runs_linux_and_windows_amd64_snapshots(self) -> None:
-        self.assertIn("optagent/tests/python/regression", WORKFLOW)
+        self.assertIn("optagent/tests/python/integration/solve/test_search.py", WORKFLOW)
         self.assertIn("optagent/tests/python/integration/kernel_contract", WORKFLOW)
-        self.assertIn("optagent/scripts/tests/regression_snapshot.py", WORKFLOW)
+        self.assertIn("scripts/generate_regression_snapshot.py", WORKFLOW)
         self.assertIn("-DOPTAGENT_BUILD_CPP_TESTS=ON", WORKFLOW)
         self.assertIn("cryptography>=43,<46", WORKFLOW)
         self.assertNotIn("highspy", WORKFLOW)
@@ -22,6 +22,10 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("regression-snapshot-windows-amd64-", WORKFLOW)
         self.assertIn("Compare Linux and Windows semantic snapshots", WORKFLOW)
         self.assertIn("scripts/compare_snapshots.py", WORKFLOW)
+
+    def test_can_target_the_local_linux_amd64_runner(self) -> None:
+        self.assertIn('default: github-hosted', WORKFLOW)
+        self.assertIn('["self-hosted","optagent-ci","linux-amd64"]', WORKFLOW)
 
     def test_is_manual_only(self) -> None:
         self.assertIn("workflow_dispatch:", WORKFLOW)

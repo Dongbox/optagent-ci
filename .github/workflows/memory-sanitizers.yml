@@ -7,6 +7,14 @@ on:
         description: Full 40-character optagent commit SHA to test
         required: true
         type: string
+      runner_target:
+        description: Run the sanitizer build on a local self-hosted runner or GitHub-hosted infrastructure
+        required: false
+        default: github-hosted
+        type: choice
+        options:
+          - self-hosted
+          - github-hosted
   schedule:
     - cron: "0 7 * * 1"
 
@@ -61,7 +69,7 @@ jobs:
   sanitizer-tests:
     name: GCC 13 ASan + UBSan + LSan
     needs: resolve
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner_target == 'self-hosted' && fromJSON('["self-hosted","optagent-ci","linux-amd64"]') || 'ubuntu-latest' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4

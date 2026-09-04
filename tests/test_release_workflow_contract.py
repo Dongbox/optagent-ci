@@ -23,7 +23,7 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         self.assertIn("Full 40-character OptAgent commit SHA", WORKFLOW)
         self.assertIn('PYTHON_VERSION: "3.12"', WORKFLOW)
         self.assertIn("runs-on: ubuntu-latest", WORKFLOW)
-        self.assertIn("runs-on: macos-14", WORKFLOW)
+        self.assertIn('["self-hosted","optagent-ci","macos-arm64"]', WORKFLOW)
         self.assertIn("runs-on: windows-latest", WORKFLOW)
         self.assertIn("persist-credentials: false", WORKFLOW)
         self.assertIn(
@@ -100,6 +100,10 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         self.assertNotIn("highspy", REGRESSION)
         self.assertIn("windows-latest", REGRESSION)
         self.assertIn("regression-snapshot-windows-amd64-", REGRESSION)
+
+    def test_release_validation_can_use_local_native_runners(self) -> None:
+        self.assertIn('["self-hosted","optagent-ci","linux-amd64"]', WORKFLOW)
+        self.assertIn('["self-hosted","optagent-ci","macos-arm64"]', WORKFLOW)
 
     def test_windows_reproduction_workflow_is_python312_and_exact_sha(self) -> None:
         self.assertIn("Full 40-character OptAgent commit SHA", WINDOWS_REPRODUCTION)

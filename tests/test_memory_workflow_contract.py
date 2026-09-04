@@ -29,6 +29,10 @@ class MemoryWorkflowContractTest(unittest.TestCase):
         self.assertIn("optagent-ci/memory-sanitizers", WORKFLOW)
         self.assertIn("repos/Dongbox/optagent/statuses/${SHA}", WORKFLOW)
 
+    def test_manual_runs_can_target_the_local_linux_runner(self) -> None:
+        self.assertIn('["self-hosted","optagent-ci","linux-amd64"]', WORKFLOW)
+        self.assertIn("github.event_name == 'workflow_dispatch'", WORKFLOW)
+
 
 if __name__ == "__main__":
     unittest.main()

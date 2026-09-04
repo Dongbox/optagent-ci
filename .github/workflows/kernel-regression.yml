@@ -7,6 +7,14 @@ on:
         description: Full 40-character optagent commit SHA to test
         required: true
         type: string
+      runner_target:
+        description: Run the Linux build on a local self-hosted runner or GitHub-hosted infrastructure
+        required: false
+        default: github-hosted
+        type: choice
+        options:
+          - self-hosted
+          - github-hosted
 
 permissions:
   contents: read
@@ -66,7 +74,7 @@ jobs:
   gcc-fast:
     name: GCC fast regression
     needs: resolve
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_target == 'self-hosted' && fromJSON('["self-hosted","optagent-ci","linux-amd64"]') || 'ubuntu-latest' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -108,16 +116,16 @@ jobs:
         run: |
           . .venv/bin/activate
           python -m pytest -q \
-            optagent/tests/python/regression \
             optagent/tests/python/integration/kernel_contract \
-            optagent/tests/python/integration/solve/test_kernel_route.py \
+            optagent/tests/python/integration/solve/test_search.py \
+            optagent/tests/python/integration/solve/test_optx.py \
             --tb=short
       - name: Generate semantic snapshot
         env:
-          PYTHONPATH: ${{ github.workspace }}/build/gcc-fast:${{ github.workspace }}/optagent:${{ github.workspace }}/optagent/src
+          PYTHONPATH: ${{ github.workspace }}/build/gcc-fast:${{ github.workspace }}/optagent/src
         run: |
           . .venv/bin/activate
-          python optagent/scripts/tests/regression_snapshot.py --output artifacts/gcc/snapshot.json
+          python scripts/generate_regression_snapshot.py --output artifacts/gcc/snapshot.json
       - uses: actions/upload-artifact@v4
         with:
           name: regression-snapshot-linux-amd64-${{ needs.resolve.outputs.sha }}
@@ -167,10 +175,12 @@ jobs:
           & $python -m pip install $wheel pytest 'protobuf>=6.33,<7.0' 'numpy>=1.26,<3.0' 'cryptography>=43,<46'
       - name: Generate Windows semantic snapshot
         shell: pwsh
+        env:
+          PYTHONPATH: ${{ github.workspace }}\optagent\src
         run: |
           $python = "$env:RUNNER_TEMP\windows-regression-venv\Scripts\python.exe"
           Push-Location $env:RUNNER_TEMP
-          & $python "$env:GITHUB_WORKSPACE\optagent\scripts\tests\regression_snapshot.py" `
+          & $python "$env:GITHUB_WORKSPACE\scripts\generate_regression_snapshot.py" `
             --output "$env:GITHUB_WORKSPACE\artifacts\windows\snapshot.json"
           Pop-Location
       - uses: actions/upload-artifact@v4
